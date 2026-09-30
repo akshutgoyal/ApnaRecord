@@ -15,6 +15,7 @@
     "index": "npm run index --workspace=server",
     "ping": "npm run ping --workspace=server",
     "dripper:new": "npm run dripper:new --workspace=server",
+    "compile:contracts": "node scripts/compile-contracts.mjs",
     "test": "node tests/run.mjs",
     "test:unit": "node tests/unit/email.test.mjs"
   },
@@ -26,5 +27,8 @@
     "ethereum",
     "sepolia"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "solc": "0.8.37"
+  }
 }

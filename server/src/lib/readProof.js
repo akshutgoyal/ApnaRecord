@@ -21,6 +21,7 @@
 
 import { ethers } from 'ethers';
 import { claimOnce } from './rateLimit.js';
+import { accountOwner } from '../services/account.js';
 
 /** How long a signed read stays valid. Short, because it is a bearer token. */
 const MAX_AGE_MS = 5 * 60 * 1000;
@@ -113,10 +114,25 @@ export async function verifyReadProof({ tokenId, viewer, issuedAt, nonce, signat
   }
 
   if (recovered.toLowerCase() !== viewer.toLowerCase()) {
-    return (
-      `That read signature was made by ${recovered}, not by the viewer it claims to be ` +
-      `(${ethers.getAddress(viewer)}).`
-    );
+    // Not a direct signature — but it may still be a good one.
+    //
+    // A record owned by an account is read by naming the ACCOUNT as the viewer, and
+    // the signature comes from the key that owns it. A contract cannot produce a
+    // signature, so without this check an account could never read its own records,
+    // which is every record created since enrolment started deploying one.
+    //
+    // The account's word is not taken as authority over the record: it only
+    // establishes who is asking. `viewRecord` below still decides whether that viewer
+    // may read, so an account that lies about its owner gains nothing — the contract
+    // refuses it on consent like anyone else.
+    const owner = await accountOwner(viewer).catch(() => null);
+
+    if (!owner || owner.toLowerCase() !== recovered.toLowerCase()) {
+      return (
+        `That read signature was made by ${recovered}, which is neither the viewer ` +
+        `(${ethers.getAddress(viewer)}) nor the owner of the account at that address.`
+      );
+    }
   }
 
   // Claimed by unique index, so two simultaneous replays cannot both win — which is

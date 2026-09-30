@@ -58,7 +58,20 @@ async function enrolOne() {
     timestamp,
     signature,
   });
-  return { email, address, privateKey, recoveryCode, created };
+  // Two addresses now, and mixing them up silently tests the wrong thing.
+  //
+  //   `owner`   the key, which signs and which the account accepts `execute` from.
+  //             It is never the on-chain owner of a record.
+  //   `address` the account the server deployed. This is what owns records, what the
+  //             server stores the row against, and what a lookup must name.
+  return {
+    email,
+    owner: address,
+    address: created.body.address || address,
+    privateKey,
+    recoveryCode,
+    created,
+  };
 }
 
 /** Build an enrol body, letting the caller override individual fields. */
@@ -117,7 +130,12 @@ const opened = await openPrivateKey(
   { sealed: fetched.enrolment.sealed, salt: fetched.enrolment.salt, iterations: fetched.enrolment.iterations },
   first.recoveryCode
 );
-check('the sealed blob opens with the recovery code', new Wallet(opened).address === first.address);
+check('the sealed blob opens with the recovery code', new Wallet(opened).address === first.owner);
+check(
+  'and the key it opens to is NOT the account — the two are different addresses',
+  first.owner.toLowerCase() !== first.address.toLowerCase(),
+  `${first.owner} vs ${first.address}`
+);
 check('the blob does not contain the private key', !fetched.enrolment.sealed.includes(first.privateKey.slice(2)));
 check('the identity comes back as a masked address', /^w•••@example\.com$/.test(fetched.enrolment.emailMasked || ''), fetched.enrolment.emailMasked);
 check('the raw address is not stored, only the mask', !JSON.stringify(fetched.enrolment).includes(first.email));

@@ -71,7 +71,16 @@ async function enrolWith(email, token) {
     timestamp,
     signature,
   });
-  return { email, address, privateKey, recoveryCode, sealed, created };
+  return {
+    email,
+    owner: address,
+    account: created.body.address || address,
+    address,
+    privateKey,
+    recoveryCode,
+    sealed,
+    created,
+  };
 }
 
 group('one contact, one wallet');
@@ -90,7 +99,7 @@ check(
 );
 check(
   'and the refusal explains why, rather than saying "conflict"',
-  /one contact, one wallet/i.test(second.created.body.message || ''),
+  /one contact, one account/i.test(second.created.body.message || ''),
   second.created.body.message
 );
 
@@ -126,7 +135,7 @@ const rebindSignature = await new Wallet(replacement.privateKey).signMessage(
 );
 
 const moved = await post('/wallet/rebind', {
-  oldAddress: rebindSource.address,
+  oldAddress: rebindSource.account,
   newAddress: replacement.address,
   sealed: replacementSealed.sealed,
   salt: replacementSealed.salt,
@@ -142,9 +151,9 @@ check(
   moved.body.note
 );
 
-const oldLookup = await fetch(`${API}/wallet/${rebindSource.address}`);
+const oldLookup = await fetch(`${API}/wallet/${rebindSource.account}`);
 check('the old address is no longer enrolled', oldLookup.status === 404, `got ${oldLookup.status}`);
-const newLookup = await fetch(`${API}/wallet/${replacement.address}`);
+const newLookup = await fetch(`${API}/wallet/${moved.body.to}`);
 check('the new address is enrolled', newLookup.status === 200, `got ${newLookup.status}`);
 
 group('rebinding a wallet that holds records is refused');
@@ -156,7 +165,7 @@ group('rebinding a wallet that holds records is refused');
 // The stub reports zero records for every address until told otherwise, so setting the
 // count on the OLD address is what proves the guard reads the old wallet and not the
 // new one. Without this, a guard that checked the wrong side would pass silently.
-const heldAddress = replacement.address;
+const heldAddress = moved.body.to;
 check('the stub accepted the record count', await setRecordCount(heldAddress, 1));
 
 await sleep(2200);
@@ -217,7 +226,7 @@ check('a rebind to the same address is refused', sameAddress.status === 400, `go
 
 group('the chain registration state is reported');
 
-const lookup = await (await fetch(`${API}/wallet/${replacement.address}`)).json();
+const lookup = await (await fetch(`${API}/wallet/${moved.body.to}`)).json();
 check(
   'a wallet lookup carries its on-chain registration state',
   lookup.onChain && typeof lookup.onChain.resolved === 'boolean',

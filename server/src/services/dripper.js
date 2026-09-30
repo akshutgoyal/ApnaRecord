@@ -129,6 +129,36 @@ async function send(to, value) {
   }
 }
 
+/**
+ * Create a contract, and wait until it exists.
+ *
+ * A sibling of `send` through the same atomic nonce claim, because it is the same
+ * wallet spending the same sequence — a deploy racing a drip would otherwise reuse a
+ * nonce. The differences are that there is no `to`, and that the address only exists
+ * once the transaction is mined, so this has to wait for a receipt.
+ *
+ * Waiting is correct here and would be wrong for a drip. A drip can return before
+ * confirmation because nothing depends on the money being there yet; the account's
+ * address IS the result, and there is nothing to report until the chain has one.
+ */
+export async function deployContract(data) {
+  const w = getWallet();
+  const nonce = await claimNonce();
+
+  const tx = await w.sendTransaction({ data, nonce });
+  const receipt = await tx.wait();
+
+  const address = receipt?.contractAddress;
+  if (!address) {
+    throw new Error(
+      `Deployment transaction ${tx.hash} produced no contract address. It may have ` +
+        'reverted, or the node may not report receipts.'
+    );
+  }
+
+  return { txHash: tx.hash, address };
+}
+
 async function spentToday() {
   const start = new Date();
   start.setHours(0, 0, 0, 0);

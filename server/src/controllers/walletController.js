@@ -18,7 +18,8 @@ import { EnrolmentModel, isDbReady } from '../models/index.js';
 import { ensureFunded, dripperStatus } from '../services/dripper.js';
 import { consumeGrant } from '../services/otp.js';
 import { noteHit } from '../lib/rateLimit.js';
-import { call } from '../services/chain.js';
+import { call, getAddress as contractAddress } from '../services/chain.js';
+import { deployAccount } from '../services/account.js';
 
 /**
  * Whether the chain knows this address as a registered identity.
@@ -161,100 +162,147 @@ export async function enrol(req, res) {
   }
 
   try {
-    const existing = await EnrolmentModel.findOne({ address: address.toLowerCase() });
+    // A repeat enrolment with the SAME KEY returns the same account rather than
+    // deploying a second one.
+    //
+    // Looked up by owner rather than by account address, because the account does not
+    // exist until it has been deployed — and by the time we could check its address, a
+    // duplicate would already have been created. A user who refreshed mid-flow, or
+    // simply enrolled twice, would otherwise end up with two accounts and no way to
+    // tell which one held their records.
+    const existing = await EnrolmentModel.findOne({ owner: address.toLowerCase() }).lean();
 
-    // Re-enrolling from the same key is a no-op rather than an error: a refresh
-    // mid-flow should not fail the user, and the blob for a given key is stable.
-    if (existing && existing.sealed !== sealed) {
-      return res.status(409).json({
-        error: 'AlreadyEnrolled',
-        message:
-          'This address already has a sealed key. If you have lost your recovery code, ' +
-          'the key cannot be replaced — the record is soulbound and recovery is not yet built.',
+    if (existing) {
+      if (existing.sealed !== sealed) {
+        return res.status(409).json({
+          error: 'AlreadyEnrolled',
+          message:
+            'This key already has an account, and the sealed blob on file differs from the one ' +
+            'you sent, so nothing was changed. If you have lost your recovery code, the record ' +
+            'is soulbound and the key cannot be replaced.',
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        existing: true,
+        address: existing.address,
+        owner: existing.owner,
+        emailMasked: existing.identity?.emailMasked || '',
+        createdAt: existing.createdAt,
+        onChain: await onChainIdentity(existing.address),
+        note:
+          'This key already has an account. Nothing was deployed, and nothing was funded twice.',
       });
     }
 
-    // ONE EMAIL, ONE WALLET.
+    // ONE EMAIL, ONE ACCOUNT.
     //
     // Looked up here so the refusal can explain itself, and enforced again by a unique
     // index because two simultaneous enrolments would both pass this lookup. Without
-    // it, one email could enrol unlimited wallets and take a 0.01 ETH drip with each —
+    // it, one email could enrol unlimited accounts and take a 0.01 ETH drip with each —
     // the global daily cap bounds the spend but does not make it cost anything.
     const holder = await EnrolmentModel.findOne({
       'identity.emailHmac': grant.contactHmac,
     }).lean();
 
-    if (holder && holder.address !== address.toLowerCase()) {
+    if (holder && holder.owner !== address.toLowerCase()) {
       return res.status(409).json({
         error: 'ContactAlreadyBound',
         message:
-          'That email address is already bound to a different wallet. One contact, one ' +
-          'wallet — otherwise every new wallet with the same address would take another ' +
-          'drip of test funds. If the bound wallet is lost, recovery is the path, because ' +
+          'That email address is already bound to a different account. One contact, one ' +
+          'account — otherwise every new wallet with the same address would take another drip ' +
+          'of test funds. If the bound account is lost, its recovery code is the path, because ' +
           'a soulbound record cannot follow you to a new address.',
         boundTo: holder.identity?.emailMasked || undefined,
       });
     }
 
+    // DEPLOY THE ACCOUNT.
+    //
+    // This is what owns the records, for ever, and it exists so that the key signing for
+    // it can do nothing except call ApnaRecord through it — a plain EOA key could sign
+    // any transaction, any message, on any chain.
+    //
+    // The server pays, because an account cannot fund its own creation. It cannot
+    // quietly substitute its own key either: the client reads `owner()` back and
+    // refuses unless it is the key it just used.
+    let account;
+    try {
+      account = await deployAccount({
+        owner: address,
+        allowedTargets: [contractAddress()],
+      });
+    } catch (error) {
+      return res.status(502).json({
+        error: 'AccountDeployFailed',
+        message:
+          'Your key is fine, but the account that owns records could not be created, so ' +
+          `nothing was enrolled: ${error?.shortMessage || error.message}`,
+      });
+    }
+
     let enrolment;
     try {
-      enrolment = await EnrolmentModel.findOneAndUpdate(
-        { address: address.toLowerCase() },
-        {
-          address: address.toLowerCase(),
-          sealed,
-          salt,
-          iterations: Number(iterations) || 600000,
-          identity: {
-            kind: 'email',
-            emailHmac: grant.contactHmac,
-            // Taken from the grant, which the server derived. A client cannot put
-            // arbitrary text next to a verified email address.
-            emailMasked: grant.contactMasked,
-            verifiedAt: new Date(),
-          },
+      enrolment = await EnrolmentModel.create({
+        address: account.address.toLowerCase(),
+        owner: address.toLowerCase(),
+        sealed,
+        salt,
+        iterations: Number(iterations) || 600000,
+        identity: {
+          kind: 'email',
+          emailHmac: grant.contactHmac,
+          // Taken from the grant, which the server derived. A client cannot put
+          // arbitrary text next to a verified email address.
+          emailMasked: grant.contactMasked,
+          verifiedAt: new Date(),
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
+        account: { txHash: account.txHash, deployedAt: new Date() },
+      });
     } catch (error) {
-      // The unique index rejecting a race the lookup above could not see.
+      // The unique indexes rejecting a race the lookups above could not see.
       if (error?.code === 11000) {
         return res.status(409).json({
           error: 'ContactAlreadyBound',
           message:
-            'That email address was bound to a different wallet at the same moment as this ' +
-            'enrolment. One contact, one wallet. Try again with the wallet you already have.',
+            'That key or email was bound to another account at the same moment as this ' +
+            'enrolment. Nothing was changed — try again with the account you already have.',
         });
       }
       throw error;
     }
 
-    // Fund immediately rather than lazily. Lazily dripping puts a pending
-    // transaction in the way of the user's very first action, which is the worst
-    // possible moment to make them wait on Sepolia.
+    // Fund the ACCOUNT, not the signing key. Every action goes through the account, so
+    // the account is what needs gas; sending it to the key would leave the account
+    // unable to do anything at all.
     //
-    // The contact goes with it, so the drip can be limited to one per person rather
-    // than one per address — a rebind gives a new address with the same contact.
+    // The contact goes with it, so the drip is limited per person rather than per
+    // address — a rebind gives a new address with the same contact.
     let drip;
     try {
-      drip = await ensureFunded(address, { contactHmac: grant.contactHmac });
+      drip = await ensureFunded(enrolment.address, { contactHmac: grant.contactHmac });
     } catch (error) {
-      // The wallet exists and the blob is stored. Failing the whole enrolment
-      // because the float hiccuped would lose an account we can still fund later.
-      console.warn(`[Wallet] Enrolled ${address} but the drip failed: ${error.message}`);
+      // The account exists and the blob is stored. Failing the whole enrolment because
+      // the float hiccuped would lose an account we can still fund later.
+      console.warn(`[Wallet] Enrolled ${enrolment.address} but the drip failed: ${error.message}`);
       drip = { ok: false, skipped: true, reason: error.message };
     }
 
     return res.status(201).json({
       ok: true,
+      // The account. This is the identity the client keeps and the address records will
+      // be minted to — not the signing key, which never appears on-chain as an owner.
       address: enrolment.address,
+      owner: enrolment.owner,
+      accountTxHash: account.txHash,
       emailMasked: enrolment.identity.emailMasked,
       createdAt: enrolment.createdAt,
       drip,
-      onChain: await onChainIdentity(address),
+      onChain: await onChainIdentity(enrolment.address),
       note:
-        'The server holds a sealed blob and cannot open it. Your recovery code is the only ' +
-        'thing that can, which is why losing it loses the wallet.',
+        'The account owns your records and its owner can never change. The server holds a ' +
+        'sealed blob it cannot open — your recovery code is the only thing that can, which ' +
+        'is why losing it loses the account.',
     });
   } catch (error) {
     return res.status(500).json({ error: 'EnrolFailed', message: error.message });
@@ -480,10 +528,10 @@ export async function rebind(req, res) {
 
     // THE GUARD.
     //
-    // Records are soulbound: they are owned by one address for ever and the contract
-    // refuses to move them. So a wallet that holds one cannot be abandoned — the record
-    // would still exist, still be owned by the old address, and nobody could ever read
-    // it again. Refusing is the honest answer; silently orphaning it is not.
+    // Records are soulbound: they are owned by one account for ever and the contract
+    // refuses to move them. So an account that holds one cannot be abandoned — the
+    // record would still exist, still owned by the old account, and nobody could ever
+    // read it again. Refusing is the honest answer; silently orphaning it is not.
     let held;
     try {
       const [balance] = await call('balanceOf', [oldAddress]);
@@ -492,7 +540,7 @@ export async function rebind(req, res) {
       return res.status(502).json({
         error: 'ChainUnavailable',
         message:
-          'Could not confirm the old wallet is empty, so nothing was moved. Retry when the ' +
+          'Could not confirm the old account is empty, so nothing was moved. Retry when the ' +
           `chain is reachable: ${error?.shortMessage || error.message}`,
       });
     }
@@ -501,26 +549,43 @@ export async function rebind(req, res) {
       return res.status(409).json({
         error: 'WalletHoldsRecords',
         message:
-          `That wallet holds ${held} record(s). Records are soulbound, so they cannot follow ` +
-          'you to a new address, and moving the binding would leave them permanently ' +
-          'unreadable. Recovery is the path for a wallet in that state.',
+          `That account holds ${held} record(s). Records are soulbound, so they cannot follow ` +
+          'you to a new account, and moving the binding would leave them permanently ' +
+          'unreadable. Recovery is the path for an account in that state.',
         records: held,
       });
     }
 
-    // Moved in place. Updating the address on the existing document rather than
-    // deleting and recreating leaves no window in which the contact is unbound, and
-    // keeps the unique index on the contact satisfied throughout.
+    // A NEW ACCOUNT, not a moved one.
+    //
+    // The account's owner is immutable — that is what makes the address permanent — so
+    // a rebind cannot re-point the existing account at a new key. It creates a fresh
+    // account for the new key, and the old one is simply left behind, empty.
+    let account;
+    try {
+      account = await deployAccount({
+        owner: newAddress,
+        allowedTargets: [contractAddress()],
+      });
+    } catch (error) {
+      return res.status(502).json({
+        error: 'AccountDeployFailed',
+        message: `The new account could not be created, so nothing was moved: ${error?.shortMessage || error.message}`,
+      });
+    }
+
     try {
       await EnrolmentModel.updateOne(
         { address: oldAddress.toLowerCase() },
         {
           $set: {
-            address: newAddress.toLowerCase(),
+            address: account.address.toLowerCase(),
+            owner: newAddress.toLowerCase(),
             sealed,
             salt,
             iterations: Number(iterations) || 600000,
             'identity.verifiedAt': new Date(),
+            account: { txHash: account.txHash, deployedAt: new Date() },
           },
         }
       );
@@ -528,7 +593,7 @@ export async function rebind(req, res) {
       if (error?.code === 11000) {
         return res.status(409).json({
           error: 'AlreadyEnrolled',
-          message: 'That new address already has a wallet.',
+          message: 'That new key already has an account.',
         });
       }
       throw error;
@@ -537,11 +602,14 @@ export async function rebind(req, res) {
     return res.json({
       ok: true,
       from: oldAddress.toLowerCase(),
-      to: newAddress.toLowerCase(),
-      onChain: await onChainIdentity(newAddress),
+      to: account.address.toLowerCase(),
+      owner: newAddress.toLowerCase(),
+      accountTxHash: account.txHash,
+      onChain: await onChainIdentity(account.address),
       note:
-        'The binding moved. No test funds are issued: this contact has already drawn its ' +
-        'allowance, and paying again on every rebind is exactly how the float would be farmed.',
+        'A new account was created for the new key, because an account owner can never change. ' +
+        'No test funds are issued: this contact has already drawn its allowance, and paying ' +
+        'again on every rebind is exactly how the float would be farmed.',
     });
   } catch (error) {
     return res.status(500).json({ error: 'RebindFailed', message: error.message });

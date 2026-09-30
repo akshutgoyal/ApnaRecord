@@ -94,21 +94,33 @@ export default function Enrol() {
         grantToken,
       });
 
-      // 4. Remember which blob belongs to this device. The address is public, so
-      //    this is a convenience, not a secret.
+      // 4. Remember which blob belongs to this device. The ACCOUNT address is public
+      //    and is what owns the records, so it is the one worth remembering — the
+      //    signing key never appears as an owner anywhere on-chain.
+      //
+      //    The server has just deployed that account; it did not exist before this
+      //    response, which is why it cannot have been generated locally.
+      const account = created.address;
+      if (!account) {
+        throw new Error(
+          'The server did not return an account address, so there is nothing to own your ' +
+            'records. This is a server-side fault, not something you did.'
+        );
+      }
+
       try {
-        localStorage.setItem(REMEMBER_KEY, address);
+        localStorage.setItem(REMEMBER_KEY, account);
       } catch {
         /* private mode — the address can be typed at unlock instead */
       }
 
       // 5. In, before the code is even written down. A user who closes the tab here
-      //    still has a working wallet; they have simply lost it until they find the
+      //    still has a working account; they have simply lost it until they find the
       //    code, which is why the next screen is emphatic about the paper.
-      await saveSession({ address, privateKey });
-      await adoptSession(address);
+      await saveSession({ address: account, privateKey });
+      await adoptSession(account);
 
-      setResult({ address, code, drip: created.drip });
+      setResult({ address: account, owner: address, code, drip: created.drip });
       setStep('code');
     } catch (problem) {
       setError(problem.message || 'Something went wrong while creating the wallet.');

@@ -9,7 +9,7 @@
 // bug that reads exactly like a product bug.
 
 import http from 'node:http';
-import { Transaction, formatEther, parseEther, Interface, id } from 'ethers';
+import { Transaction, formatEther, parseEther, Interface, id, getCreateAddress } from 'ethers';
 
 const PORT = Number(process.env.MOCK_PORT) || 8545;
 const DRIPPER = (process.env.MOCK_DRIPPER || '').toLowerCase();
@@ -23,6 +23,7 @@ let badHashSends = Number(process.env.MOCK_BAD_HASH_COUNT) || 0;
 const READS = new Interface([
   'function ownerOf(uint256) view returns (address)',
   'function balanceOf(address) view returns (uint256)',
+  'function owner() view returns (address)',
   'function nextTokenId() view returns (uint256)',
   'function hasRole(bytes32,address) view returns (bool)',
   'function verifyRecord(uint256,bytes32) view returns (bool)',
@@ -38,10 +39,19 @@ const selector = (name) => READS.getFunction(name).selector.toLowerCase();
 // records and no single fixed answer can test both the refusal and the allowance.
 const recordCounts = new Map();
 
+// Account address -> its owner key. Set at runtime through `mock_setAccountOwner`,
+// because the real answer lives in the deployed contract's immutable storage and this
+// stub deliberately does not parse deployment calldata to find it.
+const accountOwners = new Map();
+
 const balances = new Map();
 const nonces = new Map();
 // Sender -> every nonce it has ever used. The point of the whole suite.
 const usedNonces = new Map();
+// txHash -> receipt, so `tx.wait()` has something to return. Without this a
+// deployment can never report an address, because the address only exists once the
+// transaction is mined and `wait()` would poll for ever.
+const receipts = new Map();
 const sent = [];
 
 if (DRIPPER) balances.set(DRIPPER, parseEther(process.env.MOCK_FLOAT || '10'));
@@ -56,6 +66,12 @@ function handle(message) {
     case 'mock_setRecordCount': {
       const [address, count] = message.params || [];
       recordCounts.set(String(address).toLowerCase(), Number(count));
+      return true;
+    }
+    // The other half of the same idea: lets a suite say which key owns an account.
+    case 'mock_setAccountOwner': {
+      const [account, owner] = message.params || [];
+      accountOwners.set(String(account).toLowerCase(), String(owner).toLowerCase());
       return true;
     }
     case 'eth_chainId':
@@ -139,9 +155,38 @@ function handle(message) {
           BigInt(recordCounts.get(String(owner).toLowerCase()) || 0),
         ]);
       }
+      if (which === selector('owner')) {
+        // The account's owner, or the zero address when this address is not one of our
+        // accounts — which is what a plain EOA answers, and the server reads that as
+        // "not an account" rather than as an error.
+        return READS.encodeFunctionResult('owner', [
+          accountOwners.get(String(call.to).toLowerCase()) || `0x${'00'.repeat(20)}`,
+        ]);
+      }
       // Unknown call. Zeros of the right shape rather than a bare `0x`, so a read the
       // server does not expect still decodes instead of throwing.
       return `0x${'00'.repeat(32)}`;
+    }
+    case 'eth_getTransactionReceipt':
+      // null, not an error, for a hash the node has not seen — which is what makes
+      // `tx.wait()` poll rather than throw.
+      return receipts.get(String(message.params?.[0]).toLowerCase()) || null;
+    case 'eth_getTransactionByHash': {
+      const hash = String(message.params?.[0]).toLowerCase();
+      const receipt = receipts.get(hash);
+      if (!receipt) return null;
+      return {
+        hash,
+        blockNumber: receipt.blockNumber,
+        blockHash: receipt.blockHash,
+        from: receipt.from,
+        to: receipt.to,
+        nonce: hex(0),
+        value: '0x0',
+        gasLimit: hex(21000),
+        gasPrice: hex(1_000_000_000),
+        type: '0x2',
+      };
     }
     case 'eth_sendRawTransaction': {
       const tx = Transaction.from(message.params[0]);
@@ -166,7 +211,36 @@ function handle(message) {
 
       balances.set(from, (balances.get(from) ?? 0n) - tx.value);
       balances.set(to, (balances.get(to) ?? 0n) + tx.value);
-      console.log(`  drip ${formatEther(tx.value)} ETH → ${to}  nonce=${tx.nonce}`);
+
+      // A transaction with no `to` is a contract creation. The address is derived,
+      // exactly as the EVM does — sender and nonce — so the account the server records
+      // is the account the chain would really have created.
+      const isDeploy = !tx.to;
+      const contractAddress = isDeploy ? getCreateAddress({ from: tx.from, nonce: tx.nonce }) : null;
+      const blockNumber = 1_000_000 + sent.length;
+
+      receipts.set(tx.hash, {
+        transactionHash: tx.hash,
+        transactionIndex: '0x0',
+        blockNumber: hex(blockNumber),
+        blockHash: `0x${'ab'.repeat(32)}`,
+        from: tx.from,
+        to: tx.to || null,
+        cumulativeGasUsed: hex(21000),
+        gasUsed: hex(21000),
+        effectiveGasPrice: hex(1_000_000_000),
+        contractAddress,
+        logs: [],
+        logsBloom: `0x${'00'.repeat(256)}`,
+        status: '0x1',
+        type: '0x2',
+      });
+
+      console.log(
+        isDeploy
+          ? `  deploy → ${contractAddress}  nonce=${tx.nonce} bytes=${(tx.data.length - 2) / 2}`
+          : `  drip ${formatEther(tx.value)} ETH → ${to}  nonce=${tx.nonce}`
+      );
 
       // AMBIGUOUS FAILURE MODE.
       //

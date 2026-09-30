@@ -96,7 +96,17 @@ const ProfileSchema = new mongoose.Schema(
  */
 const EnrolmentSchema = new mongoose.Schema(
   {
+    // The account — what owns the records, for ever. This is the identity everything
+    // else refers to, and the address the client looks itself up by.
     address: { type: String, required: true, unique: true, lowercase: true, index: true },
+    // The key that signs for that account. Registered as the account's owner on-chain,
+    // and the only thing the account will accept an `execute` from.
+    //
+    // Stored so a repeat enrolment with the same key returns the SAME account instead
+    // of deploying a second one — without it, a user who refreshed mid-flow, or simply
+    // enrolled twice, would end up with two accounts and no way to tell which held
+    // their records.
+    owner: { type: String, required: true, unique: true, lowercase: true, index: true },
     sealed: { type: String, required: true },
     salt: { type: String, required: true },
     iterations: { type: Number, default: 600000 },
@@ -118,6 +128,12 @@ const EnrolmentSchema = new mongoose.Schema(
       txHash: { type: String, default: '' },
       at: { type: Date, default: null },
       topUps: { type: Number, default: 0 },
+    },
+    // The deployment of the account this row is about. Kept so the creation is
+    // auditable from our side too, rather than only from a block explorer.
+    account: {
+      txHash: { type: String, default: '' },
+      deployedAt: { type: Date, default: null },
     },
   },
   { timestamps: true }
