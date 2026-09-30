@@ -600,9 +600,10 @@ answer.
   **production path, not something built here**.
 - **The CID is unexposed, not hidden.** Solidity `private` only removes it from the ABI.
   Encryption is what protects the file, and the contract gates the location.
-- **ABDM / ABHA and DILRMP are alignment targets**, not built integrations. The schema
-  carries an `identity` field with a `local` kind waiting for the adapter; nothing verifies
-  an ABHA today.
+- **Identity is a verified email address, and nothing else.** There is no national-ID
+  integration, no adapter waiting to be plugged in, and no reserved field for one. A contact
+  locates an account and can never open one, which is what keeps this from drifting into being
+  an identity system by accident.
 - **The demo walkthrough cannot read records.** A persona holds no key, so it cannot sign a
   read proof. Dashboards, charts and metadata all still work — only the file reader stops,
   and it explains why rather than failing silently.

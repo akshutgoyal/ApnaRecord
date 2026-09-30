@@ -110,8 +110,11 @@ const EnrolmentSchema = new mongoose.Schema(
     sealed: { type: String, required: true },
     salt: { type: String, required: true },
     iterations: { type: Number, default: 600000 },
-    // The verified contact binding. `kind` is the seam another identity provider would
-    // occupy later; today it is always 'email'.
+    // The verified contact binding.
+    //
+    // `kind` has exactly one legal value and is not a seam for anything — there is no
+    // national-ID or other provider waiting to occupy it. It is kept because a
+    // self-describing field costs nothing and reads better than an unnamed one.
     //
     // Note what is stored: a keyed hash used for lookup, and a masked form for display.
     // The address itself is never persisted — it exists inside the send call and then
