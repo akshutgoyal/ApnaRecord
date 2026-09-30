@@ -21,7 +21,7 @@ import React, {
   useState,
 } from 'react';
 import { BrowserProvider, Contract, Interface, getAddress, isAddress } from 'ethers';
-import { ABI, CONTRACT_ADDRESS, CHAIN_ID } from './contract';
+import { ABI, ACCOUNT_ABI, CONTRACT_ADDRESS, CHAIN_ID } from './contract';
 import { chainPermissions, recordsByOwner } from './services/api';
 import { DEMO_ACCOUNTS } from './config/demoAccounts';
 import {
@@ -231,7 +231,7 @@ export function ChainProvider({ children }) {
    *
    * Two sources, one interface: a locally-created wallet that was unlocked with a
    * recovery code, or the extension if one is present. Pages never learn which —
-   * `writeContract` and `signMessage` are the only consumers.
+   * `writeAs` and `signMessage` are the only consumers.
    */
   const getSigner = useCallback(async () => {
     const local = getLocalSigner();
@@ -248,27 +248,83 @@ export function ChainProvider({ children }) {
     return new Contract(CONTRACT_ADDRESS, ABI, provider);
   }, [getReadProvider]);
 
-  /** A contract that can write, signed by whichever signer is available. */
-  const writeContract = useCallback(async () => {
-    // Top up before writing, but only for a wallet we created. A MetaMask user
-    // manages their own gas, and sending test ETH to an arbitrary connected wallet
-    // would be both pointless and rude.
-    if (hasSession()) {
-      try {
-        const outcome = await ensureGas(getLocalSigner());
-        if (outcome?.skipped !== true && outcome?.ok === false) {
-          console.warn('[Gas] Top-up did not happen:', outcome.reason);
-        }
-      } catch (error) {
-        // A failed top-up must never block the write. If the wallet genuinely
-        // cannot pay, the transaction itself says so more precisely than we could.
-        console.warn('[Gas] Top-up failed:', error.message);
-      }
-    }
+  /**
+   * Send a call to ApnaRecord. This is how every write is made.
+   *
+   * THERE ARE TWO KINDS OF OWNER, AND THEY NEED DIFFERENT PATHS. A wallet created here
+   * owns its records through an ACCOUNT, so the call has to be wrapped in
+   * `account.execute(...)`: `msg.sender` at ApnaRecord must be the account, and the
+   * signing key owns nothing — calling directly reverts. A demo persona or a connected
+   * browser wallet owns records as itself and calls directly.
+   *
+   * That split is what makes the account additive rather than a migration. It is also
+   * the source of the only real subtlety here: getting it wrong produces a revert on
+   * every write, which reads as a permissions bug rather than as the wrong call path.
+   *
+   * Wrapping has a second effect worth naming, because it is the point of the account:
+   * the key is bounded. It can reach an allowlisted target and nothing else, so a stolen
+   * key cannot drain whatever else the address touches.
+   */
+  const writeAs = useCallback(
+    async (functionName, args = [], overrides = {}) => {
+      const account = sessionAddress();
 
-    const signer = await getSigner();
-    return new Contract(CONTRACT_ADDRESS, ABI, signer);
-  }, [getSigner]);
+      if (account) {
+        const signer = getLocalSigner();
+        if (!signer) {
+          throw new Error('No account is unlocked, so there is nothing to sign with.');
+        }
+
+        // Top up the ACCOUNT before writing. Failing to top up must never block the
+        // write — if it genuinely cannot pay, the transaction says so more precisely
+        // than a warning could.
+        try {
+          await ensureGas(signer, account);
+        } catch (error) {
+          console.warn('[Gas] Top-up failed:', error.message);
+        }
+
+        const data = new Interface(ABI).encodeFunctionData(functionName, args);
+        const vault = new Contract(account, ACCOUNT_ABI, signer);
+        return vault.execute(CONTRACT_ADDRESS, overrides.value ?? 0, data);
+      }
+
+      // No account: a persona or a connected wallet, which owns records directly.
+      const signer = await getSigner();
+      const data = new Interface(ABI).encodeFunctionData(functionName, args);
+      return signer.sendTransaction({ to: CONTRACT_ADDRESS, data, ...overrides });
+    },
+    [getLocalSigner, getSigner]
+  );
+
+  /**
+   * Simulate a call without spending gas, along the same path `writeAs` would take.
+   *
+   * The two demo buttons that prove soulbound enforcement and role enforcement both work
+   * by CALLING something that should revert. Simulating along the write path is what makes
+   * those proofs honest — simulating the other path would prove something about a call the
+   * user could never actually make.
+   */
+  const simulateAs = useCallback(
+    async (functionName, args = []) => {
+      const account = sessionAddress();
+      const data = new Interface(ABI).encodeFunctionData(functionName, args);
+
+      if (account) {
+        const signer = getLocalSigner();
+        if (!signer) {
+          throw new Error('No account is unlocked, so there is nothing to sign with.');
+        }
+        const vault = new Contract(account, ACCOUNT_ABI, signer);
+        return vault.execute.staticCall(CONTRACT_ADDRESS, 0, data);
+      }
+
+      const signer = await getSigner();
+      const contract = new Contract(CONTRACT_ADDRESS, ABI, signer);
+      return contract[functionName].staticCall(...args);
+    },
+    [getLocalSigner, getSigner]
+  );
 
   /**
    * Sign a plain message with the connected wallet.
@@ -669,7 +725,8 @@ export function ChainProvider({ children }) {
       endSession,
       // contract access
       readContract,
-      writeContract,
+      writeAs,
+      simulateAs,
       signMessage,
       signRead,
       topUpGas,
@@ -699,7 +756,8 @@ export function ChainProvider({ children }) {
       endSession,
       getSigner,
       readContract,
-      writeContract,
+      writeAs,
+      simulateAs,
       signMessage,
       signRead,
       topUpGas,

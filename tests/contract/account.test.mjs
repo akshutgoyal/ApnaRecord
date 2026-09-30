@@ -78,7 +78,19 @@ group('setup');
 // Ganache is an older EVM and does not know the Cancun hardfork, so it runs at its own
 // default. That is fine for this contract — it uses no Cancun-only opcode — but it is a
 // real difference from the chain it deploys to, and worth knowing rather than assuming.
-const evm = ganache.provider({ logging: { quiet: true } });
+// ganache writes a version banner directly to stdout at creation. When this suite runs
+// through the runner its output is piped, and the banner interleaves with the summary
+// line — turning "23 passed, 0 failed" into "22043223 passed, 0 failed". It is
+// intermittent, which makes it worse rather than better: a mangled count in a test
+// summary is exactly the sort of thing that hides a real failure.
+const realStdoutWrite = process.stdout.write.bind(process.stdout);
+let evm;
+process.stdout.write = () => true;
+try {
+  evm = ganache.provider({ logging: { quiet: true } });
+} finally {
+  process.stdout.write = realStdoutWrite;
+}
 const provider = new ethers.BrowserProvider(evm);
 const accounts = await provider.listAccounts();
 const ownerSigner = await provider.getSigner(accounts[0].address);

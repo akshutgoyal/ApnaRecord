@@ -24,7 +24,7 @@ import {
 const RECORD_TYPES = ['MRI_SCAN', 'BLOOD_PANEL', 'XRAY', 'DISCHARGE_SUMMARY', 'PRESCRIPTION'];
 
 export default function Admin() {
-  const { account, roles, readContract, writeContract, signMessage, refresh } = useChain();
+  const { account, roles, readContract, writeAs, simulateAs, signMessage, refresh } = useChain();
   const toast = useToast();
   const onDone = useCallback(() => refresh(), [refresh]);
   const { run, isBusy } = useTx({ onDone });
@@ -86,8 +86,7 @@ export default function Admin() {
       async () => {
         if (!isAddress(newIdentity.address)) throw new Error('A valid address is required.');
         if (!newIdentity.label.trim()) throw new Error('A label is required.');
-        const contract = await writeContract();
-        const tx = await contract.createIdentity(newIdentity.address, newIdentity.label.trim());
+        const tx = await writeAs('createIdentity', [newIdentity.address, newIdentity.label.trim()]);
         await tx.wait();
         setNewIdentity({ address: '', label: '' });
         await load();
@@ -100,12 +99,15 @@ export default function Admin() {
       'Grant role',
       async () => {
         if (!isAddress(roleGrant.address)) throw new Error('A valid address is required.');
-        const contract = await writeContract();
+        // The role constants are READS, so they come from a read contract. They used to
+        // be read off the write contract, which worked only while the write contract was
+        // also the caller — it is not the caller any more.
+        const reader = await readContract();
         const roleValue =
           roleGrant.role === 'MANAGER_ROLE'
-            ? await contract.MANAGER_ROLE()
-            : await contract.AUDITOR_ROLE();
-        const tx = await contract.grantRole(roleValue, roleGrant.address);
+            ? await reader.MANAGER_ROLE()
+            : await reader.AUDITOR_ROLE();
+        const tx = await writeAs('grantRole', [roleValue, roleGrant.address]);
         await tx.wait();
         setRoleGrant((current) => ({ ...current, address: '' }));
         await load();
@@ -151,13 +153,12 @@ export default function Admin() {
         });
 
         // 3. Only the 32-byte digest goes on-chain.
-        const writable = await writeContract();
-        const tx = await writable.mintRecord(
+        const tx = await writeAs('mintRecord', [
           mint.patient,
           digest,
           `local://${digest.slice(2, 14)}`,
-          mint.recordType
-        );
+          mint.recordType,
+        ]);
         await tx.wait();
         setMint({ patient: '', recordType: 'MRI_SCAN', file: null });
       },
@@ -174,8 +175,7 @@ export default function Admin() {
       async () => {
         const tokenId = Number(revokeId);
         if (!Number.isInteger(tokenId) || tokenId <= 0) throw new Error('Enter a token ID.');
-        const contract = await writeContract();
-        const tx = await contract.revokeRecord(tokenId);
+        const tx = await writeAs('revokeRecord', [tokenId]);
         await tx.wait();
         setRevokeId('');
         await load();
@@ -187,11 +187,11 @@ export default function Admin() {
     run(
       'Attempt transfer',
       async () => {
-        const contract = await writeContract();
         const tokenId = Number(revokeId) || 1;
         try {
-          // A simulated call, so proving the point costs no gas.
-          await contract.transferFrom.staticCall(account, account, tokenId);
+          // A simulated call, so proving the point costs no gas — along the same path
+          // the real write would take, or it would not be simulating anything.
+          await simulateAs('transferFrom', [account, account, tokenId]);
         } catch (error) {
           return describeError(error).title;
         }

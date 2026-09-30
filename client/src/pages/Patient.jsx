@@ -29,7 +29,7 @@ const DURATIONS = [
 ];
 
 export default function Patient() {
-  const { account, ownedRecords, readContract, writeContract, signRead, refresh } = useChain();
+  const { account, ownedRecords, readContract, writeAs, signRead, refresh } = useChain();
   const { run, isBusy } = useTx({ onDone: useCallback(() => refresh(), [refresh]) });
 
   const [grants, setGrants] = useState([]);
@@ -106,10 +106,9 @@ export default function Patient() {
       'grantAccess',
       async () => {
         if (!isAddress(grant.viewer)) throw new Error('A valid viewer address is required.');
-        const contract = await writeContract();
         const tokenId = tokenIds[0];
         if (!tokenId) throw new Error('You do not own a record yet.');
-        const tx = await contract.grantAccess(tokenId, grant.viewer, grant.duration);
+        const tx = await writeAs('grantAccess', [tokenId, grant.viewer, grant.duration]);
         await tx.wait();
         setGrant((current) => ({ ...current, viewer: '' }));
         await loadGrants();
@@ -125,8 +124,7 @@ export default function Patient() {
     run(
       `revokeAccess #${tokenId}`,
       async () => {
-        const contract = await writeContract();
-        const tx = await contract.revokeAccess(tokenId, viewer);
+        const tx = await writeAs('revokeAccess', [tokenId, viewer]);
         await tx.wait();
         await loadGrants();
       },

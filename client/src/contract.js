@@ -70,6 +70,24 @@ export const ABI = [
   'error ReentrancyGuardReentrantCall()',
 ];
 
+/**
+ * The account that owns the records, and can never change hands.
+ *
+ * Every write goes through `execute`, because `msg.sender` at ApnaRecord has to be the
+ * account — the signing key owns nothing, so calling directly reverts. The allowlist is
+ * the point of the contract: the key can reach ApnaRecord and nothing else.
+ */
+export const ACCOUNT_ABI = [
+  'function owner() view returns (address)',
+  'function isAllowedTarget(address target) view returns (bool)',
+  'function execute(address target, uint256 value, bytes data) returns (bytes)',
+
+  // Named so a refusal arrives as something readable rather than "unknown custom error".
+  'error NotOwner()',
+  'error TargetNotAllowed(address target)',
+  'error CallFailed(bytes reason)',
+];
+
 // `import.meta.env` exists only under Vite. Optional chaining costs nothing in the
 // browser and makes this module importable by plain Node, which is what lets the
 // test suite load the real read-proof domain instead of re-declaring it and

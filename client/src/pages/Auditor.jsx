@@ -26,7 +26,7 @@ import { DataTable } from '../components/viz/primitives';
 // page never edits an event — it can only render what the chain already says.
 
 export default function Auditor() {
-  const { account, roles, writeContract } = useChain();
+  const { account, roles, simulateAs } = useChain();
   const { run, isBusy } = useTx();
 
   const [records, setRecords] = useState([]);
@@ -76,9 +76,8 @@ export default function Auditor() {
     run(
       `auditRecord #${tokenId}`,
       async () => {
-        const contract = await writeContract();
         try {
-          await contract.auditRecord.staticCall(tokenId);
+          await simulateAs('auditRecord', [tokenId]);
           return 'allowed';
         } catch (error) {
           return describeError(error).title;

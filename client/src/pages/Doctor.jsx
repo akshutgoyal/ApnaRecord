@@ -21,7 +21,7 @@ import {
 const RECORD_TYPES = ['MRI_SCAN', 'BLOOD_PANEL', 'XRAY', 'DISCHARGE_SUMMARY'];
 
 export default function Doctor() {
-  const { account, roles, readContract, writeContract, signRead, refresh } = useChain();
+  const { account, roles, readContract, writeAs, signRead, refresh } = useChain();
   const { run, isBusy } = useTx({ onDone: useCallback(() => refresh(), [refresh]) });
 
   const [records, setRecords] = useState([]);
@@ -78,8 +78,7 @@ export default function Doctor() {
       'requestRecord',
       async () => {
         if (!isAddress(request.patient)) throw new Error('A valid patient address is required.');
-        const contract = await writeContract();
-        const tx = await contract.requestRecord(request.patient, request.recordType);
+        const tx = await writeAs('requestRecord', [request.patient, request.recordType]);
         await tx.wait();
       },
       {
@@ -94,8 +93,7 @@ export default function Doctor() {
         const tokenId = Number(breakGlass.tokenId);
         if (!Number.isInteger(tokenId) || tokenId <= 0) throw new Error('Enter a token ID.');
         if (!breakGlass.reason.trim()) throw new Error('Break-glass requires a stated reason.');
-        const contract = await writeContract();
-        const tx = await contract.emergencyAccess(tokenId, account, breakGlass.reason.trim());
+        const tx = await writeAs('emergencyAccess', [tokenId, account, breakGlass.reason.trim()]);
         await tx.wait();
         setBreakGlass({ tokenId: '', reason: '' });
         await load();

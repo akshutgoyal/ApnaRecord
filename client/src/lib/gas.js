@@ -26,12 +26,20 @@ import { dripMessage } from './wireMessages.js';
 const CLIENT_FLOOR_WEI = 4_000_000_000_000_000n; // 0.004 ETH
 
 /**
- * Ask for a top-up if this wallet is running low. Never throws: a failed top-up is
- * not a reason to block a write, because the write reports its own honest error if
- * it genuinely cannot pay for itself.
+ * Ask for a top-up if the account is running low. Never throws: a failed top-up is not
+ * a reason to block a write, because the write reports its own honest error if it
+ * genuinely cannot pay for itself.
+ *
+ * The balance checked — and the address funded — is the ACCOUNT, not the signing key.
+ * Since records moved to accounts, every write is sent BY the account, so the account is
+ * what has to hold gas. A top-up sent to the key would leave the account unable to do
+ * anything while looking like it succeeded.
+ *
+ * The signature still comes from the key, because an account cannot sign. The server
+ * verifies that the caller controls the account it is asking to fund.
  */
-export async function ensureGas(signer) {
-  const address = await signer.getAddress();
+export async function ensureGas(signer, accountAddress) {
+  const address = accountAddress || (await signer.getAddress());
   const balance = await signer.provider.getBalance(address);
 
   if (balance >= CLIENT_FLOOR_WEI) {
