@@ -14,7 +14,9 @@
     "start:server": "npm run start --workspace=server",
     "index": "npm run index --workspace=server",
     "ping": "npm run ping --workspace=server",
-    "dripper:new": "npm run dripper:new --workspace=server"
+    "dripper:new": "npm run dripper:new --workspace=server",
+    "test": "node tests/run.mjs",
+    "test:unit": "node tests/unit/email.test.mjs"
   },
   "keywords": [
     "health records",

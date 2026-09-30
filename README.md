@@ -452,7 +452,7 @@ CONTACT_RESEND_COOLDOWN_MS=30000       # minimum gap between requests for one ad
 
 > **On email delivery.** Transactional email needs a relay authenticated for the sending
 > domain — **SPF**, **DKIM** and **DMARC** records published, the domain verified at the
-> relay, and `EMAIL_FROM` set to an address on it — before carriers deliver anything.
+> relay, and `EMAIL_FROM` set to an address on it — before any of it reaches an inbox.
 > Miss any of those and codes land in spam or nowhere, which looks exactly like a broken
 > server. Email OTP has real free tiers (Resend and Brevo among them) and no registration
 > gate. The `mock` sender is what this repo defaults to, and it is genuinely usable for
@@ -748,6 +748,35 @@ db.enrolments.find({}).forEach(d => {
 print(hits === 0 ? "no raw key, no recovery code, no derived material" : hits + " leak(s)");
 '
 ```
+
+---
+
+## Testing
+
+```bash
+npm test               # everything. Starts a stub chain and a server, then tears them down
+npm run test:unit      # email, codes and relay adapters only — no server, no database
+```
+
+`npm test` needs **MongoDB reachable** and nothing else — the chain and the mail relay are
+both stubbed, so no testnet funds and no relay account are involved.
+
+```bash
+docker run -d -p 27017:27017 mongo:7
+npm test
+```
+
+It uses `mongodb://127.0.0.1:27017/apnarecord_test`, a database of its own, so a run cannot
+clear the data you develop against. Point it elsewhere with `DATABASE_URL`.
+
+The three suites cover, in order: the email library and each relay adapter against a stub
+endpoint; verification over HTTP including the cooldown, the caps, the five-guess lockout
+and grant reuse; and enrolment end to end, where both proofs are required, a spent grant is
+refused, the sealed blob opens only with the recovery code, and concurrent enrolments
+produce no nonce collision.
+
+`tests/README.md` explains what each suite needs and calls out the three assertions that are
+easy to weaken into passing for the wrong reason.
 
 ---
 

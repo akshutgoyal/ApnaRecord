@@ -1,6 +1,6 @@
 // Wallet enrolment and lookup, end to end over HTTP.
 //
-// Run from the project root:  node .tmp-test-wallet.mjs
+// Run from the project root:  node tests/integration/wallet.test.mjs
 // Requires the API pointed at the mock chain, with a funded dripper.
 
 import fs from 'node:fs';
@@ -10,24 +10,14 @@ import {
   sealPrivateKey,
   generateRecoveryCode,
   openPrivateKey,
-} from '/home/akshut/ApnaRecord/client/src/lib/keystore.js';
-import { enrolMessage } from '/home/akshut/ApnaRecord/client/src/lib/wireMessages.js';
-import { enrolMessage as serverEnrolMessage } from '/home/akshut/ApnaRecord/server/src/controllers/walletController.js';
+} from '../../client/src/lib/keystore.js';
+import { enrolMessage } from '../../client/src/lib/wireMessages.js';
+import { enrolMessage as serverEnrolMessage } from '../../server/src/controllers/walletController.js';
+import { check, group, report } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
 const MOCK_LOG = process.env.MOCK_LOG || '/tmp/mock-chain.log';
 
-let pass = 0;
-let fail = 0;
-function check(name, condition, detail = '') {
-  if (condition) {
-    pass += 1;
-    console.log(`  ok   ${name}`);
-  } else {
-    fail += 1;
-    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
-  }
-}
 
 async function post(path, body) {
   const response = await fetch(`${API}${path}`, {
@@ -85,7 +75,7 @@ async function enrolBody(overrides = {}) {
   };
 }
 
-console.log('\nthe wire format');
+group('the wire format');
 const probe = '0x0000000000000000000000000000000000000001';
 check(
   'the client and server agree on the enrol message byte for byte',
@@ -93,13 +83,13 @@ check(
   enrolMessage(probe, 1234567890)
 );
 
-console.log('\nenrolment');
+group('enrolment');
 const first = await enrolOne();
 check('an enrolment with both proofs succeeds', first.created.status === 201, JSON.stringify(first.created.body).slice(0, 200));
 check('a drip transaction comes back', Boolean(first.created.body.drip?.txHash), JSON.stringify(first.created.body.drip));
 check('the address is echoed back masked', /^w•••@example\.com$/.test(first.created.body.emailMasked || ''), first.created.body.emailMasked);
 
-console.log('\nwhat was actually stored');
+group('what was actually stored');
 const fetched = await get(`/wallet/${first.address}`);
 const opened = await openPrivateKey(
   { sealed: fetched.enrolment.sealed, salt: fetched.enrolment.salt, iterations: fetched.enrolment.iterations },
@@ -110,7 +100,7 @@ check('the blob does not contain the private key', !fetched.enrolment.sealed.inc
 check('the identity comes back as a masked address', /^w•••@example\.com$/.test(fetched.enrolment.emailMasked || ''), fetched.enrolment.emailMasked);
 check('the raw address is not stored, only the mask', !JSON.stringify(fetched.enrolment).includes(first.email));
 
-console.log('\nwhat enrolment refuses');
+group('what enrolment refuses');
 const badSig = await post(
   '/wallet/enrol',
   await enrolBody({
@@ -145,7 +135,7 @@ check(
   `${noGrant.status} ${noGrant.body.error}`
 );
 
-console.log('\nfinding a wallet by address');
+group('finding a wallet by address');
 const found = await get(`/wallet/${first.address}`);
 check('a wallet is found by its address', found.enrolment?.address === first.address.toLowerCase());
 
@@ -158,7 +148,7 @@ check(
   JSON.stringify(strangers.body.wallets)
 );
 
-console.log('\nconcurrent enrolments');
+group('concurrent enrolments');
 const burst = await Promise.all([enrolOne(), enrolOne(), enrolOne(), enrolOne()]);
 check('all four were created', burst.every((item) => item.created.status === 201), burst.map((b) => b.created.status).join(','));
 
@@ -172,5 +162,4 @@ check(
 const dripper = await get('/dripper');
 check('the dripper is enabled and reports a balance', dripper.enabled === true, JSON.stringify(dripper).slice(0, 160));
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+report();

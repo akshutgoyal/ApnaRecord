@@ -1,23 +1,17 @@
 // The email verification flow, over real HTTP against a real database.
 //
-// Start the API with a short cooldown and a generous per-IP cap first:
-//   CONTACT_RESEND_COOLDOWN_MS=2000 CONTACT_MAX_PER_IP=500 node server/src/index.js
+// The API must already be running. tests/run.mjs does that for you.
 //
-// Run from the project root:  node .tmp-test-contact.mjs
+// Run directly:  node tests/integration/contact.test.mjs
+//
+// The server needs a SHORT cooldown and a generous per-IP cap, otherwise this suite
+// cannot request a second code for the same address inside a test run:
+//   CONTACT_RESEND_COOLDOWN_MS=2000 CONTACT_MAX_PER_IP=500
+
+import { check, group, report } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
 
-let pass = 0;
-let fail = 0;
-function check(name, condition, detail = '') {
-  if (condition) {
-    pass += 1;
-    console.log(`  ok   ${name}`);
-  } else {
-    fail += 1;
-    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
-  }
-}
 
 async function post(path, body) {
   const response = await fetch(`${API}${path}`, {
@@ -31,7 +25,7 @@ async function post(path, body) {
 const unique = () => `t${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-console.log('\nrequesting a code');
+group('requesting a code');
 const address = unique();
 const first = await post('/identity/email/request', { email: address });
 check('request succeeds', first.status === 200, JSON.stringify(first.body));
@@ -40,7 +34,7 @@ check('the address comes back masked', /^t•••@example\.com$/.test(first.bo
 check('the raw address is NOT echoed back', !JSON.stringify(first.body).includes(address));
 check('it warns that no real email was sent', (first.body.note || '').includes('mock'));
 
-console.log('\nlimits');
+group('limits');
 const immediate = await post('/identity/email/request', { email: address });
 check('an immediate resend is rate limited', immediate.status === 429, `got ${immediate.status}`);
 check('the reason is a plain wait, not a hint about which limit', /Try again in/.test(immediate.body.message || ''));
@@ -49,7 +43,7 @@ const badAddress = await post('/identity/email/request', { email: 'not-an-addres
 check('a malformed address is refused', badAddress.status === 400, `got ${badAddress.status}`);
 check('and refused with a readable reason', /email address/i.test(badAddress.body.message || ''));
 
-console.log('\nchecking a code');
+group('checking a code');
 const wrong = await post('/identity/email/verify', { email: address, code: '000000' });
 check('a wrong code is refused', wrong.status === 400, `got ${wrong.status}`);
 check('and says how many attempts remain', /attempt/i.test(wrong.body.message || ''), wrong.body.message);
@@ -64,7 +58,7 @@ const locked = await post('/identity/email/verify', { email: address, code: firs
 check('after five wrong guesses even the CORRECT code is refused', locked.status === 400, `got ${locked.status}`);
 check('and says the code is locked', /lock|too many wrong/i.test(locked.body.message || ''), locked.body.message);
 
-console.log('\na grant');
+group('a grant');
 await sleep(2200);
 const address2 = unique();
 const second = await post('/identity/email/request', { email: address2 });
@@ -85,5 +79,4 @@ check('a forged grant is refused', forged.status === 401, `got ${forged.status}`
 const missing = await post('/wallet/lookup', {});
 check('a missing grant is refused', missing.status === 401, `got ${missing.status}`);
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+report();

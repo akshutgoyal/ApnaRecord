@@ -1,68 +1,49 @@
 // The email library, and the relay adapters against a stub.
 //
-// Run from the project root:  node .tmp-test-email.mjs
+// Run from the project root:  node tests/unit/email.test.mjs   (or: npm run test:unit)
+//
+// Needs no server, no database and no network. It does need MASTER_KEY, which it takes
+// from server/.env if present and otherwise falls back to a throwaway key.
 
-import '/home/akshut/ApnaRecord/server/src/config/env.js';
+import '../../server/src/config/env.js';
 
 import http from 'node:http';
-import {
-  normaliseEmail,
-  emailHmac,
-  maskEmail,
-} from '/home/akshut/ApnaRecord/server/src/lib/email.js';
-import { generateCode, hashCode, timingSafeEqual } from '/home/akshut/ApnaRecord/server/src/lib/codes.js';
-import { sendCodeByEmail, emailProviderName } from '/home/akshut/ApnaRecord/server/src/services/emailSender.js';
+import { normaliseEmail, emailHmac, maskEmail } from '../../server/src/lib/email.js';
+import { generateCode, hashCode, timingSafeEqual } from '../../server/src/lib/codes.js';
+import { sendCodeByEmail, emailProviderName } from '../../server/src/services/emailSender.js';
+import { check, caught, group, report } from '../support/harness.mjs';
 
-let pass = 0;
-let fail = 0;
-function check(name, condition, detail = '') {
-  if (condition) {
-    pass += 1;
-    console.log(`  ok   ${name}`);
-  } else {
-    fail += 1;
-    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
-  }
-}
-function throws(fn) {
-  try {
-    fn();
-    return null;
-  } catch (error) {
-    return error;
-  }
-}
 
-console.log('\nnormaliseEmail');
+group('normaliseEmail');
 check('accepts a plain address', normaliseEmail('akshut@example.com') === 'akshut@example.com');
 check('lowercases', normaliseEmail('Akshut@Example.COM') === 'akshut@example.com');
 check('trims', normaliseEmail('  a@b.co  ') === 'a@b.co');
 check('plus-addressing is preserved', normaliseEmail('a+records@b.co') === 'a+records@b.co');
-check('rejects empty', throws(() => normaliseEmail('')) !== null);
-check('rejects non-strings', throws(() => normaliseEmail(42)) !== null);
-check('rejects a missing @', throws(() => normaliseEmail('akshut.example.com')) !== null);
-check('rejects two @', throws(() => normaliseEmail('a@b@c.com')) !== null);
-check('rejects a dotless domain', throws(() => normaliseEmail('a@localhost')) !== null);
-check('rejects a leading-dot domain', throws(() => normaliseEmail('a@.com')) !== null);
-check('rejects a double dot', throws(() => normaliseEmail('a@b..co')) !== null);
-check('rejects an over-long local part', throws(() => normaliseEmail(`${'x'.repeat(65)}@b.co`)) !== null);
-check('rejects an over-long total', throws(() => normaliseEmail(`${'x'.repeat(60)}@${'y'.repeat(200)}.com`)) !== null);
-check('rejects whitespace inside', throws(() => normaliseEmail('a b@c.com')) !== null);
+check('rejects empty', caught(() => normaliseEmail('')) !== null);
+check('rejects non-strings', caught(() => normaliseEmail(42)) !== null);
+check('rejects a missing @', caught(() => normaliseEmail('akshut.example.com')) !== null);
+check('rejects two @', caught(() => normaliseEmail('a@b@c.com')) !== null);
+check('rejects a dotless domain', caught(() => normaliseEmail('a@localhost')) !== null);
+check('rejects a leading-dot domain', caught(() => normaliseEmail('a@.com')) !== null);
+check('rejects a double dot', caught(() => normaliseEmail('a@b..co')) !== null);
+check('rejects an over-long local part', caught(() => normaliseEmail(`${'x'.repeat(65)}@b.co`)) !== null);
+check('rejects an over-long total', caught(() => normaliseEmail(`${'x'.repeat(60)}@${'y'.repeat(200)}.com`)) !== null);
+check('rejects whitespace inside', caught(() => normaliseEmail('a b@c.com')) !== null);
 
-console.log('\nmaskEmail');
+group('maskEmail');
 const masked = maskEmail('akshut@example.com');
 check('shows the domain', masked.endsWith('@example.com'), masked);
 check('shows exactly one leading character', masked.startsWith('a•••'), masked);
 check('does not leak the local part', !masked.includes('kshut'), masked);
 check('hides the local length', maskEmail('a@b.co') === maskEmail('aaaaaaaaaaaa@b.co'));
 
-console.log('\nemailHmac');
+group('emailHmac');
 check('is deterministic', emailHmac('a@b.co') === emailHmac('a@b.co'));
 check('ignores case, like the normaliser', emailHmac('A@B.co') === emailHmac('a@b.co'));
 check('differs per address', emailHmac('a@b.co') !== emailHmac('c@b.co'));
 check('is 64 hex chars', /^[0-9a-f]{64}$/.test(emailHmac('a@b.co')));
 
-console.log('\ncodes');
+group('codes');
 check('generateCode is six digits', /^\d{6}$/.test(generateCode()));
 check('generateCode varies', new Set(Array.from({ length: 200 }, generateCode)).size > 150);
 check('a code is bound to its contact', hashCode('contact-a', '123456') !== hashCode('contact-b', '123456'));
@@ -73,7 +54,7 @@ check('timingSafeEqual handles a length mismatch', timingSafeEqual('abc', 'abcd'
 
 // ---------------------------------------------------------------- relay adapters
 
-console.log('\nrelay adapters');
+group('relay adapters');
 
 let captured = null;
 let stubStatus = 200;
@@ -146,5 +127,4 @@ check('an unknown provider is refused, not guessed at', /EMAIL_PROVIDER/.test(ba
 stub.close();
 globalThis.fetch = realFetch;
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+report();
