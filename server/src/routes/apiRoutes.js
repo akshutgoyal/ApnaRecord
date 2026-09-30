@@ -44,7 +44,7 @@ router.post('/identity/email/verify', checkCode);
 // The key is generated and sealed in the browser; the server is only ever handed
 // ciphertext it cannot open. There is no route here that can sign as a user.
 router.post('/wallet/enrol', enrol);
-// Find your wallets from a verified phone. Replaces looking one up by address.
+// Find your wallets from a verified email address. Replaces looking one up by address.
 router.post('/wallet/lookup', lookupWallets);
 router.post('/wallet/:address/drip', requestDrip);
 router.get('/wallet/:address', getWallet);

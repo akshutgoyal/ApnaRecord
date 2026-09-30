@@ -9,7 +9,7 @@
 // A NOTE ON THE BLOB FETCH. `GET /api/wallet/:address` is public, and was very
 // nearly gated behind the contact grant. It was left public deliberately — the
 // ciphertext is useless without a 100-bit recovery code, whereas a patient who
-// changed their number would have lost access to soulbound records for ever. The
+// changed their email address would have lost access to soulbound records for ever. The
 // reasoning is recorded on getWallet below, because the decision is a trade and not
 // an oversight. `POST /api/wallet/lookup` is the recommended path.
 
@@ -110,7 +110,7 @@ function looksLikeBase64(value, maxChars) {
  * The grant proves the caller controls the email address being bound. Both are
  * required, and they prove different things: that you hold this key, and that this
  * address is yours. An address alone would let anyone bind someone else's
- * wallet to their own number and then look it up later.
+ * wallet to their own email address and then look it up later.
  */
 export async function enrol(req, res) {
   if (requireDb(res)) return;
@@ -173,9 +173,8 @@ export async function enrol(req, res) {
           kind: 'email',
           emailHmac: grant.contactHmac,
           // Taken from the grant, which the server derived. A client cannot put
-          // arbitrary text next to a verified number.
+          // arbitrary text next to a verified email address.
           emailMasked: grant.contactMasked,
-          value: '',
           verifiedAt: new Date(),
         },
       },
@@ -246,7 +245,7 @@ export async function lookupWallets(req, res) {
       })),
       note:
         'Ciphertext. Useless without the recovery code, which the server has never seen. ' +
-        'Verifying a number can locate a wallet; it can never open one.',
+        'Verifying an email address can locate a wallet; it can never open one.',
     });
   } catch (error) {
     return res.status(500).json({ error: 'WalletReadFailed', message: error.message });

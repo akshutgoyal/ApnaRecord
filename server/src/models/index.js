@@ -108,10 +108,9 @@ const EnrolmentSchema = new mongoose.Schema(
     // nowhere, which is what keeps holding contacts from becoming the liability it
     // usually is.
     identity: {
-      kind: { type: String, default: 'email' },
+      kind: { type: String, default: 'email', enum: ['email'] },
       emailHmac: { type: String, default: '', index: true },
       emailMasked: { type: String, default: '' },
-      value: { type: String, default: '' },
       verifiedAt: { type: Date, default: null },
     },
     drip: {

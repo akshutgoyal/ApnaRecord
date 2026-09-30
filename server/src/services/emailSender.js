@@ -41,6 +41,20 @@ function fromAddress() {
   return from;
 }
 
+/**
+ * Split "Name <email@domain>" into { name, email }.
+ * Resend accepts the display-name form as-is; Brevo needs the two parts
+ * separately, and rejects a display name inside `sender.email`.
+ */
+function splitFrom(from) {
+  const match = /^\s*(.*?)\s*<\s*([^<>\s@]+@[^<>\s]+)\s*>\s*$/.exec(from);
+  if (match) {
+    const name = match[1].trim().replace(/^["']|["']$/g, '');
+    return { name: name || undefined, email: match[2].trim() };
+  }
+  return { name: undefined, email: from.trim() };
+}
+
 function bodyFor(code) {
   return (
     `Your ApnaRecord verification code is ${code}.\n\n` +
@@ -90,7 +104,10 @@ async function sendWithBrevo(email, code) {
     method: 'POST',
     headers: { 'api-key': key, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      sender: { email: fromAddress() },
+      sender: (() => {
+        const { name, email } = splitFrom(fromAddress());
+        return name ? { name, email } : { email };
+      })(),
       to: [{ email }],
       subject: 'ApnaRecord verification code',
       textContent: bodyFor(code),

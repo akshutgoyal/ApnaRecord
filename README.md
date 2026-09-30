@@ -106,10 +106,10 @@ record of authority, not of access.
 There is no MetaMask step, and no seed phrase. A patient is walked through four things and
 never sees a wallet:
 
-1. **They verify a phone number.** One code, and the number is bound to the account. This is
+1. **They verify an email address.** One code, and the address is bound to the account. This is
    not decoration: it is what lets them find their wallet again on a new device. It is also
-   *only* that — a number can locate a wallet and can never open one, which is why a
-   SIM swap here ends with an attacker holding ciphertext instead of a medical history.
+   *only* that — an address can locate a wallet and can never open one, which is why an
+   inbox takeover here ends with an attacker holding ciphertext instead of a medical history.
 2. **A key is generated in the browser.** Not on the server. It is created with
    `crypto.getRandomValues`, and it exists in that tab and nowhere else until step 3.
 3. **It is locked behind a recovery code** — 20 characters in four groups of five, from a
@@ -119,12 +119,12 @@ never sees a wallet:
 4. **The user writes the code on paper.** The screen shows it once, offers a print and a
    download, and requires an explicit confirmation before continuing.
 
-The server then holds a sealed blob, a salt, an address, and a **hash** of the phone number.
-It cannot open the blob and it does not have the number:
+The server then holds a sealed blob, a salt, an address, and a **hash** of the email address.
+It cannot open the blob and it does not have the address:
 
 ```text
-phone      ──HMAC(MASTER_KEY)──>  stored, for lookup only
-           └─ masked as +91 98••••3210 for display; the digits are never persisted
+email      ──HMAC(MASTER_KEY)──>  stored, for lookup only
+           └─ masked as a•••@gmail.com for display; the address is never persisted
 
 recovery   ──PBKDF2(600k)──> wrapping key ──AES-GCM──> sealed blob ──> server
 code       └── never transmitted. Not to the server, not to us, not anywhere.
@@ -133,13 +133,13 @@ code       └── never transmitted. Not to the server, not to us, not anywhe
 Any endpoint that could sign as a user is absent by construction, which is the point. Anyone
 who exfiltrates the whole database gets ciphertext, addresses, and hashes.
 
-### Phone numbers, and what they are not
+### Email addresses, and what they are not
 
-A phone number identifies a *channel to reach someone*, not a person. It is SIM-swappable,
-shared between family members, and recycled by carriers. So the design gives it exactly one
+An email address identifies a *channel to reach someone*, not a person. It is free to
+create, free to share, and abandoned without ceremony. So the design gives it exactly one
 job and forbids it the other:
 
-| A verified number **can** | A verified number **cannot** |
+| A verified address **can** | A verified address **cannot** |
 |---|---|
 | Locate the wallets bound to it | Open any of them |
 | Trigger a fresh code | Recover a lost recovery code |
@@ -147,8 +147,8 @@ job and forbids it the other:
 
 That separation is the whole reason the identity provider can be weak without weakening the
 product. It also means the honest limit is stated plainly rather than discovered: **if a
-patient loses both the number and the recovery code, the wallet is gone**, and because the
-records are soulbound they cannot be moved. A second number, a second code, or a guardian
+patient loses both the address and the recovery code, the wallet is gone**, and because the
+records are soulbound they cannot be moved. A second address, a second code, or a guardian
 quorum is the designed fix and is not built.
 
 > **The trade-off, stated plainly.** Without an extension there is no OS-level confirmation
@@ -434,25 +434,29 @@ DRIP_FLOOR=0.003                        # top up only when an account falls belo
 DRIP_DAILY_CAP=1.0                      # circuit breaker, per calendar day
 DRIP_LOW_WATER=0.05                     # warn loudly below this
 
-MASTER_KEY=                             # 64 hex chars. Seals record keys AND keys the phone hash
+MASTER_KEY=                             # 64 hex chars. Seals record keys AND keys the contact hash
 
-# Identity. `mock` prints the code to the server log and returns it to the browser,
-# so the whole flow works with no provider account. Production sets twilio or msg91.
-OTP_PROVIDER=mock
-OTP_MAX_PER_IP=12                       # codes per address per hour
-OTP_MAX_PER_HOUR=5                      # codes per number per hour
-OTP_RESEND_COOLDOWN_MS=30000            # minimum gap between requests for one number
+# Identity: the verified email address. `mock` prints the code to the server log
+# and returns it to the browser, so the whole flow works with no relay account,
+# no verified domain and no DNS records. Production sets resend or brevo.
+EMAIL_PROVIDER=mock
+EMAIL_FROM="ApnaRecord <no-reply@yourdomain.com>"
+# RESEND_API_KEY=                      # resend free tier: 3,000 messages/month
+# BREVO_API_KEY=                       # brevo free tier: 300 messages/day
+CONTACT_MAX_PER_IP=12                  # codes per caller IP per hour
+CONTACT_MAX_PER_HOUR=5                 # codes per address per hour
+CONTACT_RESEND_COOLDOWN_MS=30000       # minimum gap between requests for one address
 
 # UPLOAD_DIR=                           # defaults to server/uploads
 ```
 
-> **On free OTP services.** The honest answer is that SMS in India is neither free nor
-> instant: transactional messages require **DLT registration** with a telecom operator —
-> an approved sender ID and approved templates — before carriers deliver anything. Twilio
-> and MSG91 both work, both cost money, and MSG91 adds the DLT step on top. Email OTP has
-> real free tiers (Resend and Brevo among them) and no registration gate. The `mock` sender
-> is what this repo defaults to, and it is genuinely usable for a demo rather than a stub
-> you have to replace before anything works.
+> **On email delivery.** Transactional email needs a relay authenticated for the sending
+> domain — **SPF**, **DKIM** and **DMARC** records published, the domain verified at the
+> relay, and `EMAIL_FROM` set to an address on it — before carriers deliver anything.
+> Miss any of those and codes land in spam or nowhere, which looks exactly like a broken
+> server. Email OTP has real free tiers (Resend and Brevo among them) and no registration
+> gate. The `mock` sender is what this repo defaults to, and it is genuinely usable for
+> a demo rather than a stub you have to replace before anything works.
 
 > `server/.env` is loaded by absolute path from `server/src/config/env.js`, which every entry
 > point imports **first**. That ordering is load-bearing: ES module imports are evaluated
@@ -561,18 +565,18 @@ answer.
 
 - **Records are soulbound**, so no ownership-transfer events exist. That is deliberate.
 - **The blob fetch is public, deliberately.** `GET /api/wallet/:address` hands over the
-  sealed key without proving anything, and it was gated behind the phone grant for an
+  sealed key without proving anything, and it was gated behind the email grant for an
   afternoon before that was reverted. The trade is bad: the ciphertext is AES-GCM over a
   key derived from a 100-bit code at 600k PBKDF2 iterations, so harvesting it is already
-  infeasible by about 2^100 — whereas gating it means a patient who changes their number
-  cannot find their wallet at all, and with soulbound records that is permanent. The fetch
-  is rate-limited instead, and the recommended path is by phone.
-- **A phone number is the only locator.** Lose the number *and* the recovery code and the
-  wallet is gone. Recovery needs a second number, a second code, or a guardian quorum, none
+  infeasible by about 2^100 — whereas gating it means a patient who changes their email
+  address cannot find their wallet at all, and with soulbound records that is permanent. The fetch
+  is rate-limited instead, and the recommended path is by email.
+- **An email address is the only locator.** Lose the address *and* the recovery code and the
+  wallet is gone. Recovery needs a second address, a second code, or a guardian quorum, none
   of which is built. The schema and the grants are shaped to accept them.
 - **OTP rate limits are per-process and in-memory.** A restart clears them, and two server
   instances do not share them. A real deployment needs a shared store and a WAF in front,
-  because SMS pumping is a billing attack rather than a security one.
+  because mail bombing is a billing attack rather than a security one.
 - **Losing the recovery code loses the records.** The wallet is a plain EOA, not a smart
   account, so there is no signer to rotate — and because the record is soulbound it cannot
   be moved to a new address either. One secret, no recovery. The designed fix (a rotatable
@@ -640,9 +644,13 @@ client/                         React 18 + Vite 6 + Tailwind 3 + ethers v6
   vercel.json                   SPA rewrites so /access · /admin · /verify survive refresh
 server/                         Express 4 + Mongoose 8
   src/index.js                  entry — `node src/index.js`, CORS open, 30 MB JSON ceiling for ciphertext
-  src/routes/apiRoutes.js       /api/health · /api/chain/* · /api/records* · /api/audit/:id · /api/verify · /api/stats · /api/profiles*
+  src/routes/apiRoutes.js       /api/health · /api/chain/* · /api/records* · /api/audit/:id · /api/verify · /api/stats · /api/profiles* · /api/identity/email/* · /api/wallet/* · /api/dripper
   src/middleware/consentGate.js THE GATE — one eth_call, never guesses
-  src/controllers/              health, chain, stats, records, profiles
+  src/lib/email.js              normalise + keyed HMAC + masked display; the address is never stored
+  src/lib/codes.js              six-digit codes, grant tokens, hashes
+  src/services/emailSender.js   mock (default) · resend · brevo; a refused send throws
+  src/services/otp.js           contact-agnostic codes: cooldown, hourly cap, five guesses, single-use grants
+  src/controllers/              health, chain, stats, records, profiles, identity, wallet
   src/services/chain.js         read-only chain access; no signer exists here
   src/services/storage.js       ciphertext blobs + content-key sealing (AES-256-GCM, UPLOAD_DIR-aware)
   src/models/index.js           Records · Identities · ChainEvents · Profiles (all rebuildable)

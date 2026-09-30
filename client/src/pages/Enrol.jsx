@@ -35,7 +35,7 @@ export default function Enrol() {
     setSending(true);
     setError(null);
     try {
-      const sent = await requestEmailCode(email);
+      const sent = await requestEmailCode(email.trim());
       setDevCode(sent.devCode || null);
       setStep('verify');
     } catch (problem) {
@@ -49,7 +49,7 @@ export default function Enrol() {
     setSending(true);
     setError(null);
     try {
-      const grant = await verifyEmailCode(email, code);
+      const grant = await verifyEmailCode(email.trim(), code);
       await create(grant.token);
     } catch (problem) {
       setError(problem.message);
@@ -112,7 +112,7 @@ export default function Enrol() {
       setStep('code');
     } catch (problem) {
       setError(problem.message || 'Something went wrong while creating the wallet.');
-      setStep('intro');
+      setStep('email');
     }
   }
 
@@ -152,12 +152,13 @@ export default function Enrol() {
         </p>
 
         {/* The mock sender puts the code in the server log. Surfacing it here is what
-            lets the whole flow be demonstrated with no provider account and no DLT
-            registration — and it disappears the moment a real sender is configured. */}
+            lets the whole flow be demonstrated with no relay account, no verified
+            domain and no DNS records — and it disappears the moment a real sender
+            is configured. */}
         {devCode && (
           <div className="mt-4 rounded-lg border border-marigold-200 bg-marigold-50 p-3">
             <p className="text-xs font-semibold text-marigold-700">
-              Mock sender active — no SMS was sent
+              Mock sender active — no email was sent
             </p>
             <p className="mt-1 text-xs text-marigold-700/90">
               Your code is <span className="mono text-sm font-semibold">{devCode}</span>. Set
@@ -413,7 +414,7 @@ export default function Enrol() {
             type="button"
             className="btn-primary"
             onClick={sendCode}
-            disabled={sending || !email.includes('@')}
+            disabled={sending || !email.trim().includes('@')}
           >
             {sending ? 'Sending…' : 'Send my code'}
           </button>

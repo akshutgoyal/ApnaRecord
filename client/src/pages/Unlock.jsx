@@ -57,7 +57,7 @@ export default function Unlock() {
     setBusy(true);
     setError(null);
     try {
-      const sent = await requestEmailCode(email);
+      const sent = await requestEmailCode(email.trim());
       setDevCode(sent.devCode || null);
       setStep('code');
     } catch (problem) {
@@ -71,7 +71,7 @@ export default function Unlock() {
     setBusy(true);
     setError(null);
     try {
-      const grant = await verifyEmailCode(email, emailCode);
+      const grant = await verifyEmailCode(email.trim(), emailCode);
       // The grant is spent here, and it returns the blobs it entitles you to — so
       // no second round-trip is needed to collect them.
       const found = await lookupWallets(grant.token);
@@ -80,6 +80,8 @@ export default function Unlock() {
           'That address is verified, but no wallet is bound to it. If you used a different ' +
             'address, try it — or use the wallet-address path below.'
         );
+        setEmailCode('');
+        setDevCode(null);
         setStep('email');
         return;
       }
@@ -187,7 +189,7 @@ export default function Unlock() {
                 type="button"
                 className="btn-primary"
                 onClick={sendCode}
-                disabled={busy || !email.includes('@')}
+                disabled={busy || !email.trim().includes('@')}
               >
                 {busy ? 'Sending…' : 'Send my code'}
               </button>
@@ -208,10 +210,11 @@ export default function Unlock() {
             {devCode && (
               <div className="mt-4 rounded-lg border border-marigold-200 bg-marigold-50 p-3">
                 <p className="text-xs font-semibold text-marigold-700">
-                  Mock sender active — no SMS was sent
+                  Mock sender active — no email was sent
                 </p>
                 <p className="mt-1 text-xs text-marigold-700/90">
-                  Your code is <span className="mono text-sm font-semibold">{devCode}</span>.
+                  Your code is <span className="mono text-sm font-semibold">{devCode}</span>. Set
+                  <span className="mono"> EMAIL_PROVIDER</span> to resend or brevo to send real messages.
                 </p>
               </div>
             )}
