@@ -17,7 +17,8 @@
     "dripper:new": "npm run dripper:new --workspace=server",
     "compile:contracts": "node scripts/compile-contracts.mjs",
     "test": "node tests/run.mjs",
-    "test:unit": "node tests/unit/email.test.mjs"
+    "test:unit": "node tests/unit/email.test.mjs",
+    "test:contract": "node tests/contract/account.test.mjs"
   },
   "keywords": [
     "health records",
@@ -29,6 +30,7 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "ganache": "7.9.2",
     "solc": "0.8.37"
   }
 }

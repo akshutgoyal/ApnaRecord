@@ -37,10 +37,16 @@ const input = {
   sources,
   settings: {
     optimizer: { enabled: true, runs: 200 },
-    // Pinned so the same source produces the same bytecode. The account is deployed by
-    // the dripper from this exact artifact, and a silent compiler default change would
-    // mean the committed bytecode no longer matches what a rebuild would produce.
-    evmVersion: 'cancun',
+    // Pinned so the same source produces the same bytecode, and set to SHANGHAI
+    // deliberately rather than to the newest available.
+    //
+    // `ApnaRecord.sol` needs Cancun because OpenZeppelin uses `mcopy`. This contract
+    // needs nothing from it. Targeting Cancun anyway bought nothing and cost two
+    // things: the bytecode refuses to run on any EVM that predates it — including the
+    // in-process one the tests use — and it narrowed where the account could ever be
+    // deployed. An `mcopy` opcode presented as an invalid opcode is a revert with no
+    // data, which reads as an unexplained failure rather than a version mismatch.
+    evmVersion: 'shanghai',
     outputSelection: {
       '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] },
     },
