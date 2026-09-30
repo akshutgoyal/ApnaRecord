@@ -6,10 +6,12 @@
 //
 // Three rules shape this file, each learned from a failure mode:
 //
-//   1. SENDS ARE SERIALISED. One wallet paying many users at once will hand two
-//      transactions the same nonce. The second is rejected, the first lands, and
-//      the result is a user whose wallet was never funded while the API reported
-//      success. Everything goes through one promise chain.
+//   1. SENDS ARE SERIALISED, AND THE NONCE IS CLAIMED IN THE DATABASE. One wallet
+//      paying many users at once will hand two transactions the same nonce. The
+//      second is rejected, the first lands, and the result is a user whose wallet was
+//      never funded while the API reported success. A promise chain only orders sends
+//      inside one process — two instances each kept their own counter — so the claim
+//      that actually makes this safe is an atomic `$inc` in MongoDB.
 //
 //   2. IT NEVER FUNDS AN ADDRESS THAT ALREADY HAS ENOUGH. A funded idle wallet is
 //      a wallet someone else can drain, and a dripper's float is the thing an
@@ -21,7 +23,7 @@
 //      signups keep succeeding and writes start failing.
 
 import { ethers } from 'ethers';
-import { EnrolmentModel } from '../models/index.js';
+import { EnrolmentModel, DripperModel, isDbReady } from '../models/index.js';
 
 const AMOUNT = ethers.parseEther(process.env.DRIP_AMOUNT || '0.01');
 const FLOOR = ethers.parseEther(process.env.DRIP_FLOOR || '0.003');
@@ -29,7 +31,6 @@ const DAILY_CAP = ethers.parseEther(process.env.DRIP_DAILY_CAP || '1.0');
 const LOW_WATER = ethers.parseEther(process.env.DRIP_LOW_WATER || '0.05');
 
 let wallet = null;
-let nextNonce = null;
 let chain = Promise.resolve();
 
 export function dripEnabled() {
@@ -56,29 +57,58 @@ function serialise(task) {
 }
 
 /**
- * Hand out the next nonce, tracked locally.
+ * Hand out the next nonce.
  *
- * Asking the node every time is the bug: right after a broadcast, the node still
- * reports the old count, and the next send reuses the nonce.
+ * The claim is an atomic `$inc` in MongoDB, and that is what makes it correct. A
+ * promise chain orders sends inside one process and says nothing about a second
+ * instance — each would keep its own counter, hand the same nonce to two different
+ * transactions, and one would be rejected while both callers were told they succeeded.
+ * A dripper that reports success for a payment it never made is worse than one that
+ * fails loudly.
+ *
+ * The serialisation below is kept, but only as an optimisation: it stops one busy
+ * process from piling concurrent claims onto the database. It is not what makes this
+ * safe, and removing it would not introduce a bug.
  */
 async function claimNonce() {
   const w = getWallet();
+  const key = w.address.toLowerCase();
+
+  // The chain is the floor. Right after a broadcast the node still reports the old
+  // count, so we never take its word over our own — but if it has moved AHEAD of us
+  // (a send we lost track of, or a restart after a crash) we follow it.
   const onChain = await w.provider.getTransactionCount(w.address, 'pending');
+
+  await DripperModel.updateOne(
+    { address: key },
+    { $setOnInsert: { address: key, nextNonce: onChain } },
+    { upsert: true }
+  );
 
   // NEVER MOVE BACKWARDS.
   //
-  // A nonce that is too LOW gets reused, and a reused nonce either replaces a pending
-  // transaction or is rejected outright — a stuck queue, and the wallet looks like it is
-  // working while nothing settles. A nonce that is too HIGH is merely a gap, which later
-  // transactions fill in by themselves. So when the chain and our own count disagree,
-  // the higher one wins.
-  //
-  // This matters most after a failed broadcast, which is precisely when we do not know
-  // whether the node accepted the transaction. Re-reading the chain there can hand back
-  // a stale value, and taking it at face value would reuse a nonce.
-  const next = nextNonce === null ? onChain : Math.max(nextNonce, onChain);
-  nextNonce = next + 1;
-  return next;
+  // A nonce too LOW is reused, and a reused nonce either replaces a pending
+  // transaction or is rejected outright — a stuck queue, with every send looking
+  // successful. A nonce too HIGH is merely a gap, which later transactions fill in on
+  // their own. So the higher of the two wins, and the counter only ever moves up.
+  await DripperModel.updateOne(
+    { address: key, nextNonce: { $lt: onChain } },
+    { $set: { nextNonce: onChain } }
+  );
+
+  // `new: false` returns the document as it was BEFORE the increment, which is the
+  // nonce being claimed. Two callers racing here get different values, because $inc
+  // is atomic.
+  const claimed = await DripperModel.findOneAndUpdate(
+    { address: key },
+    { $inc: { nextNonce: 1 } },
+    { new: false, lean: true }
+  );
+
+  if (!claimed) {
+    throw new Error('Could not claim a nonce — the dripper counter document is missing.');
+  }
+  return claimed.nextNonce;
 }
 
 async function send(to, value) {
@@ -149,6 +179,13 @@ export async function dripperStatus() {
 export async function ensureFunded(address, { reason = 'enrolment' } = {}) {
   if (!dripEnabled()) {
     return { ok: false, skipped: true, reason: 'dripper not configured' };
+  }
+
+  // The nonce claim and the daily cap both live in the database, and without it there
+  // is no safe way to hand out a nonce. A skipped drip is recoverable — the wallet
+  // exists and can be funded later. A wrong nonce is not.
+  if (!isDbReady()) {
+    return { ok: false, skipped: true, reason: 'database unavailable' };
   }
 
   return serialise(async () => {

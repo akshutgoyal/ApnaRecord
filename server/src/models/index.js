@@ -169,6 +169,74 @@ const ContactGrantSchema = new mongoose.Schema(
 );
 ContactGrantSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
+/**
+ * Abuse counters.
+ *
+ * These used to live in `Map`s inside the controllers, which meant they were cleared
+ * by every restart, reset by every deploy, and never shared — so running two
+ * instances gave an attacker double the allowance, and a crash-loop gave them
+ * unlimited attempts. A limiter that resets when you kick it is a speed bump.
+ *
+ * One document per hit, deliberately, rather than a counter per (bucket, key). A
+ * counter document needs a read-modify-write or a conditional upsert to stay
+ * correct, and getting that wrong silently under-counts; counting rows inside the
+ * window is obvious and the TTL index keeps the collection small. The trade is that
+ * two simultaneous requests can both read the same count and let one extra through —
+ * acceptable for abuse control, and not acceptable for anything in `OneShotModel`
+ * below, which is why that one is a unique index instead.
+ */
+const RateLimitSchema = new mongoose.Schema(
+  {
+    bucket: { type: String, required: true },
+    key: { type: String, required: true },
+    at: { type: Date, default: Date.now },
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: true }
+);
+RateLimitSchema.index({ bucket: 1, key: 1, at: 1 });
+RateLimitSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+/**
+ * A value that may be used exactly once — read-proof nonces, and anything else where
+ * a repeat is an attack rather than an inconvenience.
+ *
+ * A UNIQUE index does the work, not a lookup followed by a write. "Check then insert"
+ * has a window between the check and the write, and a replay is precisely the kind of
+ * request that arrives in that window. Letting the database refuse the duplicate is
+ * atomic and needs no locking.
+ */
+const OneShotSchema = new mongoose.Schema(
+  {
+    bucket: { type: String, required: true },
+    key: { type: String, required: true },
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: true }
+);
+OneShotSchema.index({ bucket: 1, key: 1 }, { unique: true });
+OneShotSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+/**
+ * The dripper's nonce counter — one document, keyed by the float's address.
+ *
+ * This exists because a promise chain only serialises sends INSIDE one process. Two
+ * instances each hold their own chain and their own idea of the next nonce, so both
+ * would hand the same nonce to two different transactions and one would be rejected
+ * while the API reported success twice.
+ *
+ * `$inc` is atomic in MongoDB, so claiming a nonce is a single round-trip that two
+ * callers cannot both win. The returned document is the pre-increment one, which is
+ * the value being claimed.
+ */
+const DripperSchema = new mongoose.Schema(
+  {
+    address: { type: String, required: true, unique: true },
+    nextNonce: { type: Number, required: true, default: 0 },
+  },
+  { timestamps: true }
+);
+
 // Guarded so `node --watch` reloads do not throw OverwriteModelError.
 export const RecordModel = mongoose.models.Record || mongoose.model('Record', RecordSchema);
 export const IdentityModel = mongoose.models.Identity || mongoose.model('Identity', IdentitySchema);
@@ -178,6 +246,9 @@ export const EnrolmentModel = mongoose.models.Enrolment || mongoose.model('Enrol
 export const OtpModel = mongoose.models.Otp || mongoose.model('Otp', OtpSchema);
 export const ContactGrantModel =
   mongoose.models.ContactGrant || mongoose.model('ContactGrant', ContactGrantSchema);
+export const RateLimitModel = mongoose.models.RateLimit || mongoose.model('RateLimit', RateLimitSchema);
+export const OneShotModel = mongoose.models.OneShot || mongoose.model('OneShot', OneShotSchema);
+export const DripperModel = mongoose.models.Dripper || mongoose.model('Dripper', DripperSchema);
 
 export const allModels = [
   RecordModel,
@@ -187,4 +258,7 @@ export const allModels = [
   EnrolmentModel,
   OtpModel,
   ContactGrantModel,
+  RateLimitModel,
+  OneShotModel,
+  DripperModel,
 ];

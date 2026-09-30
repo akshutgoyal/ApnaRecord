@@ -12,7 +12,9 @@ import {
   openPrivateKey,
 } from '../../client/src/lib/keystore.js';
 import { enrolMessage } from '../../client/src/lib/wireMessages.js';
+import { storeMessage } from '../../client/src/lib/wireMessages.js';
 import { enrolMessage as serverEnrolMessage } from '../../server/src/controllers/walletController.js';
+import { storeMessage as serverStoreMessage } from '../../server/src/controllers/recordController.js';
 import { check, group, report } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
@@ -81,6 +83,26 @@ check(
   'the client and server agree on the enrol message byte for byte',
   enrolMessage(probe, 1234567890) === serverEnrolMessage(probe, 1234567890),
   enrolMessage(probe, 1234567890)
+);
+
+// The store statement is the one that authenticates an upload, so drift here means
+// every record upload is refused — and the failure presents as a permissions bug.
+const probeDigest = `0x${'ab'.repeat(32)}`;
+check(
+  'the client and server agree on the store message byte for byte',
+  storeMessage(7, probe, probeDigest, 1234567890) === serverStoreMessage(7, probe, probeDigest, 1234567890),
+  storeMessage(7, probe, probeDigest, 1234567890)
+);
+check(
+  'the store message lowercases the digest, so a checksum case cannot break it',
+  storeMessage(7, probe, `0x${'AB'.repeat(32)}`, 1) === storeMessage(7, probe, `0x${'ab'.repeat(32)}`, 1)
+);
+check(
+  'the store message binds the token id, the patient and the digest',
+  storeMessage(7, probe, probeDigest, 1) !== storeMessage(8, probe, probeDigest, 1) &&
+    storeMessage(7, probe, probeDigest, 1) !==
+      storeMessage(7, '0x0000000000000000000000000000000000000002', probeDigest, 1) &&
+    storeMessage(7, probe, probeDigest, 1) !== storeMessage(7, probe, `0x${'cd'.repeat(32)}`, 1)
 );
 
 group('enrolment');

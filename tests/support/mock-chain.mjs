@@ -9,15 +9,33 @@
 // bug that reads exactly like a product bug.
 
 import http from 'node:http';
-import { Transaction, formatEther, parseEther } from 'ethers';
+import { Transaction, formatEther, parseEther, Interface, id } from 'ethers';
 
 const PORT = Number(process.env.MOCK_PORT) || 8545;
 const DRIPPER = (process.env.MOCK_DRIPPER || '').toLowerCase();
 // How many sends to accept but then report with a hash the client will reject.
 let badHashSends = Number(process.env.MOCK_BAD_HASH_COUNT) || 0;
 
+// Contract reads the server makes before it will store a record or verify a proof.
+// Typed, so the mock can answer them with correctly encoded results instead of a bare
+// `0x` — which ethers cannot decode, turning every read into a decode error and making
+// the records endpoint impossible to test.
+const READS = new Interface([
+  'function ownerOf(uint256) view returns (address)',
+  'function nextTokenId() view returns (uint256)',
+  'function hasRole(bytes32,address) view returns (bool)',
+  'function verifyRecord(uint256,bytes32) view returns (bool)',
+  'function DEFAULT_ADMIN_ROLE() view returns (bytes32)',
+  'function canAccess(uint256,address) view returns (bool)',
+  'function viewRecord(uint256) view returns (string)',
+]);
+
+const selector = (name) => READS.getFunction(name).selector.toLowerCase();
+
 const balances = new Map();
 const nonces = new Map();
+// Sender -> every nonce it has ever used. The point of the whole suite.
+const usedNonces = new Map();
 const sent = [];
 
 if (DRIPPER) balances.set(DRIPPER, parseEther(process.env.MOCK_FLOAT || '10'));
@@ -75,23 +93,57 @@ function handle(message) {
         uncles: [],
         transactions: [],
       };
-    case 'eth_call':
-      // Contract reads are not what this stub is for. Hand back empty data rather than
-      // inventing a plausible-looking answer.
-      return '0x';
+    case 'eth_call': {
+      const call = message.params?.[0] || {};
+      const data = String(call.data || '0x');
+      const which = data.slice(0, 10).toLowerCase();
+
+      // ownerOf on a token that does not exist REVERTS — that is how the server tells
+      // "this token has an owner" from "this token is about to be minted". Answering
+      // with zeros would claim every token is owned by address(0) and quietly send
+      // every upload down the wrong branch.
+      if (which === selector('ownerOf')) {
+        return { __revert: 'ERC721NonexistentToken(uint256)' };
+      }
+      if (which === selector('nextTokenId')) {
+        return READS.encodeFunctionResult('nextTokenId', [BigInt(process.env.MOCK_NEXT_TOKEN_ID || 1)]);
+      }
+      if (which === selector('hasRole')) {
+        return READS.encodeFunctionResult('hasRole', [process.env.MOCK_IS_ADMIN === 'true']);
+      }
+      if (which === selector('verifyRecord')) {
+        return READS.encodeFunctionResult('verifyRecord', [process.env.MOCK_VERIFY_RECORD !== 'false']);
+      }
+      if (which === selector('DEFAULT_ADMIN_ROLE')) {
+        return READS.encodeFunctionResult('DEFAULT_ADMIN_ROLE', [id('DEFAULT_ADMIN_ROLE')]);
+      }
+      if (which === selector('canAccess')) {
+        return READS.encodeFunctionResult('canAccess', [false]);
+      }
+      // Unknown call. Zeros of the right shape rather than a bare `0x`, so a read the
+      // server does not expect still decodes instead of throwing.
+      return `0x${'00'.repeat(32)}`;
+    }
     case 'eth_sendRawTransaction': {
       const tx = Transaction.from(message.params[0]);
       const from = at(tx.from);
       const to = at(tx.to);
       sent.push({ from, to, value: tx.value.toString(), nonce: tx.nonce });
 
-      // The nonce belongs to the SENDER. Checking the recipient's would make the
-      // collision check in the suite pass no matter what the dripper did.
-      const expected = nonces.get(from) ?? 0;
-      if (tx.nonce !== expected) {
-        console.log(`  !! NONCE COLLISION from ${from}: got ${tx.nonce}, expected ${expected}`);
+      const used = usedNonces.get(from) || new Set();
+      // A REUSE is the failure that matters, and it is the only thing flagged here.
+      //
+      // An earlier version compared against the next expected number, which flagged
+      // out-of-order arrival as a collision. Two servers racing produce nonces that
+      // reach the node in any order, and that is fine — nonces exist to be ordered by
+      // the chain, not by arrival. What is not fine is the same nonce twice, because
+      // one transaction then replaces the other and a payment silently disappears.
+      if (used.has(tx.nonce)) {
+        console.log(`  !! NONCE REUSE from ${from}: ${tx.nonce} was already sent`);
       }
-      nonces.set(from, tx.nonce + 1);
+      used.add(tx.nonce);
+      usedNonces.set(from, used);
+      nonces.set(from, Math.max(nonces.get(from) ?? 0, tx.nonce + 1));
 
       balances.set(from, (balances.get(from) ?? 0n) - tx.value);
       balances.set(to, (balances.get(to) ?? 0n) + tx.value);
@@ -132,9 +184,21 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const body = Array.isArray(parsed)
-      ? parsed.map((message) => ({ jsonrpc: '2.0', id: message.id, result: handle(message) }))
-      : { jsonrpc: '2.0', id: parsed.id, result: handle(parsed) };
+    // A revert has to come back as a JSON-RPC error, not as a result, or ethers will
+    // happily decode it as data and the caller will never see an exception.
+    const respond = (message) => {
+      const result = handle(message);
+      if (result && typeof result === 'object' && result.__revert) {
+        return {
+          jsonrpc: '2.0',
+          id: message.id,
+          error: { code: 3, message: `execution reverted: ${result.__revert}` },
+        };
+      }
+      return { jsonrpc: '2.0', id: message.id, result };
+    };
+
+    const body = Array.isArray(parsed) ? parsed.map(respond) : respond(parsed);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));

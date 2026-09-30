@@ -29,3 +29,20 @@ export function dripMessage(address, timestamp) {
     `timestamp: ${timestamp}`
   );
 }
+
+/**
+ * Must match server/src/controllers/recordController.js `storeMessage`.
+ *
+ * `recordHash` is lowercased on both sides. ethers already returns lowercase hex from
+ * keccak256, but the two sides independently build this string and a stray checksum
+ * case would produce a signature that verifies nowhere.
+ */
+export function storeMessage(tokenId, patient, recordHash, timestamp) {
+  return (
+    'ApnaRecord store record\n' +
+    `tokenId: ${Number(tokenId)}\n` +
+    `patient: ${getAddress(patient)}\n` +
+    `recordHash: ${String(recordHash).toLowerCase()}\n` +
+    `timestamp: ${timestamp}`
+  );
+}

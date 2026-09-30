@@ -117,7 +117,7 @@ export async function requireConsent(req, res, next) {
 
   const { tokenId, viewer } = parsed;
 
-  const refused = verifyReadProof({
+  const refused = await verifyReadProof({
     tokenId,
     viewer,
     issuedAt: req.get('x-apnarecord-issued-at'),

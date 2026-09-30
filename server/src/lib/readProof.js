@@ -20,6 +20,7 @@
 // signature harvested here cannot be replayed against a different deployment.
 
 import { ethers } from 'ethers';
+import { claimOnce } from './rateLimit.js';
 
 /** How long a signed read stays valid. Short, because it is a bearer token. */
 const MAX_AGE_MS = 5 * 60 * 1000;
@@ -45,26 +46,23 @@ export const READ_TYPES = {
 /**
  * Replay guard.
  *
- * In-memory and best-effort, and the comment says so rather than implying
- * otherwise: it is cleared by a restart and is not shared between instances. The
- * real protection is the five-minute window, and the blast radius of a replay is
- * small — it re-reads a record the viewer was already entitled to read. A durable
- * store is the correct answer the day this runs on more than one process.
+ * A UNIQUE index in the database, not a `Map` in this process. The in-memory version
+ * forgot every spent signature when the server restarted, and each instance kept its
+ * own list — so a replay only had to wait for a deploy, or land on the other
+ * instance. The blast radius of a replay is small (it re-reads a record the viewer
+ * was already entitled to read), which is why it was acceptable then; it is not a
+ * reason to leave it that way now.
  */
-const seenNonces = new Map();
-
-function pruneNonces(now) {
-  for (const [nonce, at] of seenNonces) {
-    if (now - at > MAX_AGE_MS) seenNonces.delete(nonce);
-  }
-}
 
 /**
  * Returns null when the proof is good, or a plain-language reason when it is not.
  * The message matters: a caller who forgot to sign needs to know that, not to be
  * told "403".
+ *
+ * Async because the replay guard lives in the database. The contract read that
+ * follows is asynchronous anyway, so this costs nothing.
  */
-export function verifyReadProof({ tokenId, viewer, issuedAt, nonce, signature }) {
+export async function verifyReadProof({ tokenId, viewer, issuedAt, nonce, signature }) {
   const now = Date.now();
 
   // Checked before anything else, because the failure it prevents is invisible: with
@@ -121,12 +119,16 @@ export function verifyReadProof({ tokenId, viewer, issuedAt, nonce, signature })
     );
   }
 
-  pruneNonces(now);
-  const key = `${recovered.toLowerCase()}:${nonce}`;
-  if (seenNonces.has(key)) {
+  // Claimed by unique index, so two simultaneous replays cannot both win — which is
+  // the case that matters, since a replay racing the original is the whole attack.
+  const claimed = await claimOnce(
+    'read-nonce',
+    `${recovered.toLowerCase()}:${nonce}`,
+    MAX_AGE_MS
+  );
+  if (!claimed) {
     return 'That read signature has already been used. Sign again.';
   }
-  seenNonces.set(key, now);
 
   return null;
 }

@@ -36,3 +36,95 @@ if (result.error && process.env.NODE_ENV !== 'production') {
   // note rather than a failure.
   console.warn(`[Env] No .env at ${envPath} — relying on the process environment.`);
 }
+
+// ---------------------------------------------------------------- validation
+//
+// WHY THIS IS HERE AND NOT IN EACH CONSUMER.
+//
+// Every one of these values used to be checked at the moment it was first needed,
+// which meant a malformed MASTER_KEY produced a server that booted cleanly, served
+// /health, and then failed the first request that touched a sealed key — with an
+// error that pointed at the record rather than at the configuration. The same was
+// true of the dripper key: enrolment succeeded and only the drip failed.
+//
+// Two different severities, deliberately:
+//
+//   • A MALFORMED value is always an error, in every environment. There is no
+//     configuration in which a 40-character MASTER_KEY is what someone meant, and
+//     continuing would store data under a key that can never be reproduced.
+//
+//   • A MISSING value is only fatal in production. Locally, running without a
+//     dripper or without a database is a legitimate way to work on chain reads, and
+//     a test that wants to exercise one module should not have to invent the rest
+//     of the configuration first.
+
+const problems = [];
+const warnings = [];
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+function checkSecret(name, pattern, description) {
+  const value = process.env[name];
+  if (!value) {
+    if (isProduction) problems.push(`${name} is required in production. ${description}`);
+    else warnings.push(`${name} is not set. ${description}`);
+    return;
+  }
+  if (!pattern.test(value)) {
+    problems.push(`${name} is malformed. ${description}`);
+  }
+}
+
+checkSecret(
+  'MASTER_KEY',
+  /^[0-9a-fA-F]{64}$/,
+  'It must be 64 hex characters — it seals every record key and keys the contact hash.'
+);
+checkSecret(
+  'DRIPPER_PRIVATE_KEY',
+  /^0x[0-9a-fA-F]{64}$/,
+  'It must be a 0x-prefixed 32-byte key — new wallets cannot be funded without it.'
+);
+checkSecret(
+  'CONTRACT_ADDRESS',
+  /^0x[0-9a-fA-F]{40}$/,
+  'It must be a 20-byte address — read signatures are verified against it.'
+);
+
+// A wildcard CORS origin is the one setting that turns every other control into a
+// suggestion, because it lets any page on the internet call this API with the
+// user's browser. Refused outright rather than warned about.
+const origins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+if (origins.includes('*')) {
+  problems.push(
+    'CORS_ORIGINS must not contain "*". Any site could then call this API from a user\'s ' +
+      'browser. List the origins explicitly.'
+  );
+}
+if (isProduction && origins.length === 0) {
+  problems.push('CORS_ORIGINS is required in production. List the origins that may call this API.');
+}
+if (!isProduction && origins.length === 0) {
+  warnings.push('CORS_ORIGINS is not set — defaulting to local development origins.');
+}
+
+if (problems.length > 0) {
+  throw new Error(
+    `\n\nConfiguration is not usable:\n${problems.map((line) => `  • ${line}`).join('\n')}\n\n` +
+      `Fix server/.env (created from server/.env.example) and start again.\n`
+  );
+}
+
+/** The parsed allowlist. Empty means "development defaults". */
+export const corsOrigins = origins;
+
+export const envWarnings = warnings;
+
+if (warnings.length > 0 && process.env.NODE_ENV !== 'test') {
+  for (const line of warnings) console.warn(`[Env] ${line}`);
+}
+

@@ -4,6 +4,7 @@ import { isAddress } from 'ethers';
 import { useChain, describeError } from '../chain';
 import { encryptRecord, formatBytes, toBase64 } from '../crypto';
 import { chainIdentities, chainEvents, storeRecord } from '../services/api';
+import { storeMessage } from '../lib/wireMessages';
 import { TX_EXPLORER } from '../contract';
 import { useTx } from '../hooks/useTx';
 import { useToast } from '../components/Toast';
@@ -23,7 +24,7 @@ import {
 const RECORD_TYPES = ['MRI_SCAN', 'BLOOD_PANEL', 'XRAY', 'DISCHARGE_SUMMARY', 'PRESCRIPTION'];
 
 export default function Admin() {
-  const { account, roles, readContract, writeContract, refresh } = useChain();
+  const { account, roles, readContract, writeContract, signMessage, refresh } = useChain();
   const toast = useToast();
   const onDone = useCallback(() => refresh(), [refresh]);
   const { run, isBusy } = useTx({ onDone });
@@ -128,6 +129,14 @@ export default function Admin() {
         const contract = await readContract();
         const tokenId = Number(await contract.nextTokenId());
 
+        // The upload is signed. The token does not exist yet — it is about to be
+        // minted — so the server cannot check its owner; it checks that the signer
+        // holds the on-chain role that permits minting, and that this is the token
+        // actually next in line. The digest is in the statement, so the bytes cannot
+        // be swapped for different ones after signing.
+        const timestamp = Date.now();
+        const signature = await signMessage(storeMessage(tokenId, mint.patient, digest, timestamp));
+
         await storeRecord({
           tokenId,
           patient: mint.patient,
@@ -137,6 +146,8 @@ export default function Admin() {
           contentKey,
           ciphertext: toBase64(payload),
           cid: `local://${digest.slice(2, 14)}`,
+          timestamp,
+          signature,
         });
 
         // 3. Only the 32-byte digest goes on-chain.

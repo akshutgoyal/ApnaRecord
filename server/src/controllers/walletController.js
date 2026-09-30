@@ -17,6 +17,7 @@ import { ethers } from 'ethers';
 import { EnrolmentModel, isDbReady } from '../models/index.js';
 import { ensureFunded, dripperStatus } from '../services/dripper.js';
 import { consumeGrant } from '../services/otp.js';
+import { noteHit } from '../lib/rateLimit.js';
 
 const MAX_AGE_MS = 5 * 60 * 1000;
 const MAX_SEALED_CHARS = 512;
@@ -32,21 +33,6 @@ const MAX_SALT_CHARS = 64;
  */
 const LOOKUP_WINDOW_MS = 60 * 1000;
 const LOOKUP_MAX = 20;
-const lookupHits = new Map();
-
-function noteAddressLookup(ip) {
-  const now = Date.now();
-  const hits = (lookupHits.get(ip) || []).filter((at) => now - at < LOOKUP_WINDOW_MS);
-  if (hits.length >= LOOKUP_MAX) return false;
-  hits.push(now);
-  lookupHits.set(ip, hits);
-  if (lookupHits.size > 5000) {
-    for (const [key, value] of lookupHits) {
-      if (!value.some((at) => now - at < LOOKUP_WINDOW_MS)) lookupHits.delete(key);
-    }
-  }
-  return true;
-}
 
 /** Kept in one place so client and server cannot drift apart. */
 export function enrolMessage(address, timestamp) {
@@ -286,7 +272,7 @@ export async function getWallet(req, res) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }
 
-  if (!noteAddressLookup(req.ip)) {
+  if (!(await noteHit('wallet-lookup-ip', req.ip, LOOKUP_MAX, LOOKUP_WINDOW_MS))) {
     return res.status(429).json({
       error: 'TooManyRequests',
       message: 'Too many wallet lookups from this address. Try again shortly.',

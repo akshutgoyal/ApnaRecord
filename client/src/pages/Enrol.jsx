@@ -105,7 +105,7 @@ export default function Enrol() {
       // 5. In, before the code is even written down. A user who closes the tab here
       //    still has a working wallet; they have simply lost it until they find the
       //    code, which is why the next screen is emphatic about the paper.
-      saveSession({ address, privateKey });
+      await saveSession({ address, privateKey });
       await adoptSession(address);
 
       setResult({ address, code, drip: created.drip });

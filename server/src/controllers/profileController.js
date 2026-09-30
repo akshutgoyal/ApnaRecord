@@ -158,7 +158,15 @@ export async function upsertProfile(req, res) {
 export async function deleteProfile(req, res) {
   if (requireDb(res)) return;
   const { address } = req.params;
-  const { timestamp, signature } = req.query;
+
+  // Headers, never the query string. A signature is a bearer credential: it needs no
+  // secret to replay, only a copy. In a URL it gets copied into access logs, browser
+  // history, and any `Referer` on a link followed from the page — all of which
+  // outlive the request it was minted for. The query-string form is deliberately not
+  // accepted as a fallback, because a fallback is just the hole left open.
+  const timestamp = req.get('x-apnarecord-timestamp');
+  const signature = req.get('x-apnarecord-signature');
+
   if (!ethers.isAddress(address)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }

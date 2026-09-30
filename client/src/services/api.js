@@ -7,11 +7,17 @@
 import { API_URL } from '../contract.js';
 
 async function request(path, options = {}) {
+  // Headers are merged, not replaced. Spreading `options` wholesale meant that
+  // passing any custom header silently dropped the default Content-Type — harmless
+  // for a GET, but it turns a signed POST into a body the server cannot parse, and
+  // the failure looks like a bad signature rather than a missing content type.
+  const { headers, ...rest } = options;
+
   let response;
   try {
     response = await fetch(`${API_URL}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
-      ...options,
+      ...rest,
+      headers: { 'Content-Type': 'application/json', ...(headers || {}) },
     });
   } catch {
     const error = new Error('Could not reach the API. Is the backend running on ' + API_URL + '?');
@@ -137,11 +143,17 @@ export const getProfile = (address) => request(`/profiles/${address}`);
 export const saveProfile = (address, body) =>
   request(`/profiles/${address}`, { method: 'PUT', body: JSON.stringify(body) });
 
+// The signature travels in headers, not the query string. A bearer credential in a
+// URL is copied into access logs, browser history and `Referer` headers — places it
+// has no business being.
 export const eraseProfile = (address, timestamp, signature) =>
-  request(
-    `/profiles/${address}?timestamp=${encodeURIComponent(timestamp)}&signature=${encodeURIComponent(signature)}`,
-    { method: 'DELETE' }
-  );
+  request(`/profiles/${address}`, {
+    method: 'DELETE',
+    headers: {
+      'x-apnarecord-timestamp': String(timestamp),
+      'x-apnarecord-signature': signature,
+    },
+  });
 
 // ------------------------------------------------------- audit and verify
 

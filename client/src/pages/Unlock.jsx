@@ -130,7 +130,7 @@ export default function Unlock() {
       // The slow part, on purpose: 600k PBKDF2 iterations before the key exists.
       const privateKey = await openPrivateKey(chosen, recoveryCode);
 
-      saveSession({ address: chosen.address, privateKey });
+      await saveSession({ address: chosen.address, privateKey });
       try {
         localStorage.setItem(REMEMBER_KEY, chosen.address);
       } catch {

@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { RecordModel, isDbReady } from '../models/index.js';
-import { recordMeta, tokensOf, call } from '../services/chain.js';
+import { recordMeta, tokensOf, call, verifyRecord } from '../services/chain.js';
+import { verifyStatement, recoverStatement } from '../lib/signature.js';
 import {
   putBlob,
   putSealedKey,
@@ -12,6 +13,24 @@ import {
 } from '../services/storage.js';
 
 const MAX_BYTES = 20 * 1024 * 1024; // 20 MB of ciphertext per request
+
+/**
+ * The statement an uploader signs.
+ *
+ * Must stay byte-identical to `client/src/lib/wireMessages.js` `storeMessage`. The two
+ * deploy separately so it is duplicated rather than imported, and the test suite
+ * asserts they agree — drift here means every upload is refused and the failure looks
+ * like a broken permissions system.
+ */
+export function storeMessage(tokenId, patient, recordHash, timestamp) {
+  return (
+    'ApnaRecord store record\n' +
+    `tokenId: ${Number(tokenId)}\n` +
+    `patient: ${ethers.getAddress(patient)}\n` +
+    `recordHash: ${String(recordHash).toLowerCase()}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
 
 /**
  * GET /api/records
@@ -116,8 +135,18 @@ export async function listByOwner(req, res) {
  */
 export async function storeRecord(req, res) {
   try {
-    const { tokenId, patient, recordType, fileName, mimeType, contentKey, ciphertext, cid } =
-      req.body || {};
+    const {
+      tokenId,
+      patient,
+      recordType,
+      fileName,
+      mimeType,
+      contentKey,
+      ciphertext,
+      cid,
+      timestamp,
+      signature,
+    } = req.body || {};
 
     if (!Number.isInteger(Number(tokenId)) || Number(tokenId) <= 0) {
       return res.status(400).json({ error: 'BadRequest', message: 'tokenId is required.' });
@@ -127,6 +156,11 @@ export async function storeRecord(req, res) {
     }
     if (typeof ciphertext !== 'string' || ciphertext.length === 0) {
       return res.status(400).json({ error: 'BadRequest', message: 'ciphertext is required.' });
+    }
+    // Validated before it is used to build a signed message, because getting this
+    // wrong throws inside message construction and would surface as a 500.
+    if (!ethers.isAddress(patient)) {
+      return res.status(400).json({ error: 'BadRequest', message: 'patient must be a wallet address.' });
     }
 
     const payload = Buffer.from(ciphertext, 'base64');
@@ -143,6 +177,87 @@ export async function storeRecord(req, res) {
     // The digest the browser put on-chain must be keccak256 of these exact bytes.
     const digest = ethers.keccak256(payload);
 
+    // ---------------------------------------------------------------------
+    // WHO IS ASKING, AND WHETHER THE CHAIN AGREES.
+    //
+    // This endpoint used to accept anything: an unauthenticated caller could write a
+    // row naming any token and any patient. The bytes are still stored before the
+    // token is minted — deliberately, since a token whose bytes nobody holds is worse
+    // than no token — so there are two cases and they need different evidence.
+    //
+    //   • The token EXISTS. This is a re-upload or a repair. The contract's owner
+    //     signs, and the bytes must hash to what the chain already recorded.
+    //
+    //   • The token does NOT exist yet. This is the ordinary mint flow. Only an
+    //     account holding DEFAULT_ADMIN_ROLE can mint it, so only such an account may
+    //     store its bytes — and only for the token actually next in line, so an
+    //     upload cannot be parked against some future id.
+    // ---------------------------------------------------------------------
+    let onChainOwner = null;
+    try {
+      const [owner] = await call('ownerOf', [Number(tokenId)]);
+      onChainOwner = owner;
+    } catch {
+      // Reverts for a token that does not exist yet, which is a legitimate state here
+      // rather than an error. Anything else would have thrown further up.
+      onChainOwner = null;
+    }
+
+    const statement = storeMessage(Number(tokenId), patient, digest, timestamp);
+
+    if (onChainOwner) {
+      const problem = verifyStatement({
+        message: statement,
+        address: onChainOwner,
+        timestamp,
+        signature,
+      });
+      if (problem) {
+        return res.status(403).json({ error: 'SignatureInvalid', message: problem });
+      }
+
+      if (onChainOwner.toLowerCase() !== String(patient).toLowerCase()) {
+        return res.status(409).json({
+          error: 'PatientMismatch',
+          message: `Token ${tokenId} belongs to ${onChainOwner}, not ${patient}. The chain is the authority here.`,
+        });
+      }
+
+      const [matches] = await verifyRecord(Number(tokenId), digest);
+      if (!matches) {
+        return res.status(409).json({
+          error: 'DigestMismatch',
+          message:
+            'These bytes do not hash to the digest recorded on-chain for this token, so storing ' +
+            'them would attach the wrong document to a medical record.',
+        });
+      }
+    } else {
+      const recovered = recoverStatement({ message: statement, timestamp, signature });
+      if (recovered.error) {
+        return res.status(403).json({ error: 'SignatureInvalid', message: recovered.error });
+      }
+
+      const [nextId] = await call('nextTokenId');
+      if (Number(tokenId) !== Number(nextId)) {
+        return res.status(400).json({
+          error: 'NotNextToken',
+          message: `Token ${tokenId} does not exist and is not next in line (${nextId}). Bytes can only be stored ahead of the mint that will create them.`,
+        });
+      }
+
+      const [adminRole] = await call('DEFAULT_ADMIN_ROLE');
+      const [isAdmin] = await call('hasRole', [adminRole, recovered.signer]);
+      if (!isAdmin) {
+        return res.status(403).json({
+          error: 'NotMintingRole',
+          message:
+            'This token has not been minted yet, so the uploader must be the account that can mint ' +
+            'it. That signature is not from an account holding DEFAULT_ADMIN_ROLE on-chain.',
+        });
+      }
+    }
+
     const { stored } = await putBlob(digest, payload);
     await putSealedKey(digest, sealKey(contentKey));
 
@@ -151,7 +266,7 @@ export async function storeRecord(req, res) {
         { tokenId: Number(tokenId) },
         {
           tokenId: Number(tokenId),
-          patient: String(patient || '').toLowerCase(),
+          patient: ethers.getAddress(patient).toLowerCase(),
           recordType: recordType || 'UNSPECIFIED',
           recordHash: digest,
           cid: cid || '',
@@ -171,6 +286,9 @@ export async function storeRecord(req, res) {
       sizeBytes: payload.length,
       alreadyStored: !stored,
       cachedInDatabase: isDbReady(),
+      verified:
+        'The uploader\'s signature was checked, and either the token\'s on-chain owner signed or ' +
+        'a minting account signed, with the bytes hashing to the on-chain digest.',
     });
   } catch (error) {
     return res.status(500).json({ error: 'StorageFailed', message: error.message });

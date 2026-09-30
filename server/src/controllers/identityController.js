@@ -16,27 +16,12 @@
 import { requestCode, verifyCode } from '../services/otp.js';
 import { emailProviderName, isMockProvider } from '../services/emailSender.js';
 import { isDbReady } from '../models/index.js';
+import { noteHit } from '../lib/rateLimit.js';
 
 const WINDOW_MS = 60 * 60 * 1000;
 // Configurable so a test suite can exercise the flow repeatedly from one address.
 // Production should leave the default.
 const MAX_PER_IP = Number(process.env.CONTACT_MAX_PER_IP) || 12;
-const ipHits = new Map();
-
-function noteIp(ip) {
-  const now = Date.now();
-  const hits = (ipHits.get(ip) || []).filter((at) => now - at < WINDOW_MS);
-  if (hits.length >= MAX_PER_IP) return false;
-  hits.push(now);
-  ipHits.set(ip, hits);
-  // Cheap eviction, so the map cannot grow without bound on a long-running process.
-  if (ipHits.size > 5000) {
-    for (const [key, value] of ipHits) {
-      if (!value.some((at) => now - at < WINDOW_MS)) ipHits.delete(key);
-    }
-  }
-  return true;
-}
 
 function requireDb(res) {
   if (!isDbReady()) {
@@ -67,7 +52,7 @@ function fail(res, error) {
 export async function sendCode(req, res) {
   if (requireDb(res)) return;
 
-  if (!noteIp(req.ip)) {
+  if (!(await noteHit('otp-ip', req.ip, MAX_PER_IP, WINDOW_MS))) {
     return res.status(429).json({
       error: 'TooManyRequests',
       message: 'Too many codes requested from this address. Try again later.',

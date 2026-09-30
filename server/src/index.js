@@ -1,5 +1,5 @@
 // Must be first: loads server/.env before any other module reads process.env.
-import './config/env.js';
+import { corsOrigins } from './config/env.js';
 import express from 'express';
 import cors from 'cors';
 import apiRoutes from './routes/apiRoutes.js';
@@ -10,7 +10,62 @@ import { dripperStatus } from './services/dripper.js';
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+// CORS IS AN ALLOWLIST, NOT A FORMALITY.
+//
+// This used to be a bare `cors()`, which sets `Access-Control-Allow-Origin: *` —
+// every page on the internet could call this API from a user's browser. Nothing
+// here relies on cookies, so it was never a session-riding hole, but it is a free
+// invitation to enumerate endpoints and to burn the rate limits of whoever is
+// looking at the site.
+//
+// A disallowed origin is now REFUSED with 403 rather than merely answered without
+// the CORS headers. The difference matters: without the headers the browser hides
+// the response, but the request still ran — the rate limiter still counted, the
+// database still answered, and a side effect would still have happened. A refusal
+// means it did not run at all.
+const DEFAULT_DEV_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
+
+const allowedOrigins = corsOrigins.length > 0 ? corsOrigins : DEFAULT_DEV_ORIGINS;
+
+// Every signing proof this API accepts travels in a header, so the preflight has to
+// name them or the browser will refuse to send them.
+const ALLOWED_HEADERS = [
+  'Content-Type',
+  'x-apnarecord-viewer',
+  'x-apnarecord-issued-at',
+  'x-apnarecord-nonce',
+  'x-apnarecord-signature',
+  'x-apnarecord-timestamp',
+];
+
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+  // No Origin header at all means a same-origin navigation, curl, or another
+  // server. CORS is a browser control and does not apply, so it is allowed — this
+  // is also what keeps the test suite and the indexer working.
+  if (origin && !allowedOrigins.includes(origin)) {
+    return res.status(403).json({
+      error: 'OriginNotAllowed',
+      message: `Origin ${origin} may not call this API.`,
+    });
+  }
+  return next();
+});
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: false,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ALLOWED_HEADERS,
+    maxAge: 600,
+  })
+);
 // Record payloads are base64 ciphertext, so the default 100kb limit is far too
 // small. The route itself enforces a 20 MB ceiling per record.
 app.use(express.json({ limit: '30mb' }));

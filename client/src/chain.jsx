@@ -24,7 +24,14 @@ import { BrowserProvider, Contract, Interface, getAddress, isAddress } from 'eth
 import { ABI, CONTRACT_ADDRESS, CHAIN_ID } from './contract';
 import { chainPermissions, recordsByOwner } from './services/api';
 import { DEMO_ACCOUNTS } from './config/demoAccounts';
-import { getLocalProvider, getLocalSigner, hasSession, sessionAddress, clearSession } from './lib/session';
+import {
+  getLocalProvider,
+  getLocalSigner,
+  hasSession,
+  sessionAddress,
+  clearSession,
+  restoreSession,
+} from './lib/session';
 import { readProofHeaders } from './lib/readProof';
 import { ensureGas } from './lib/gas';
 
@@ -182,6 +189,9 @@ export function ChainProvider({ children }) {
   // this instead of guessing from transient flags, so a deep link is not bounced
   // to /access while the session is still settling.
   const [bootstrapped, setBootstrapped] = useState(false);
+  // The stored session arrives wrapped, so it cannot be read synchronously. Nothing
+  // may conclude "nobody is signed in" until this flips.
+  const [sessionRestored, setSessionRestored] = useState(false);
   // The address of a wallet created here and unlocked with a recovery code, as
   // opposed to one that arrived through an extension. Tracked as state, not just
   // read from storage, so the gate can distinguish "nothing can resolve this" from
@@ -482,9 +492,29 @@ export function ChainProvider({ children }) {
     return () => clearInterval(timer);
   }, [demoRole, refresh]);
 
+  // Unwrap the stored session once, before anything asks whether one exists. The
+  // failure mode this avoids is subtle and looks like a bug elsewhere: without it,
+  // a refreshed page briefly reports no session, and any gate that acts on that
+  // would bounce the user to /access while their key was about to arrive.
+  useEffect(() => {
+    let cancelled = false;
+    restoreSession().finally(() => {
+      if (!cancelled) setSessionRestored(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // A wallet created here needs no extension, so it resolves on its own — on mount
   // if one is already unlocked, and through adoptSession() the moment one is.
+  //
+  // Gated on `sessionRestored` because the key is no longer stored in the clear: it
+  // arrives wrapped, and unwrapping is asynchronous. Checking hasSession() before that
+  // finishes would always be false, and the wallet would look signed out on every
+  // refresh until something else happened to re-render.
   useEffect(() => {
+    if (!sessionRestored) return undefined;
     if (demoRole || !hasSession()) return undefined;
 
     const address = sessionAddress();
@@ -498,7 +528,7 @@ export function ChainProvider({ children }) {
 
     const timer = setInterval(() => refresh(), POLL_MS);
     return () => clearInterval(timer);
-  }, [demoRole, refresh]);
+  }, [demoRole, refresh, sessionRestored]);
 
   /**
    * Take up a wallet that was just created or unlocked.
