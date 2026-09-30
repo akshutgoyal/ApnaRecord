@@ -22,6 +22,7 @@ let badHashSends = Number(process.env.MOCK_BAD_HASH_COUNT) || 0;
 // the records endpoint impossible to test.
 const READS = new Interface([
   'function ownerOf(uint256) view returns (address)',
+  'function balanceOf(address) view returns (uint256)',
   'function nextTokenId() view returns (uint256)',
   'function hasRole(bytes32,address) view returns (bool)',
   'function verifyRecord(uint256,bytes32) view returns (bool)',
@@ -31,6 +32,11 @@ const READS = new Interface([
 ]);
 
 const selector = (name) => READS.getFunction(name).selector.toLowerCase();
+
+// How many records each address owns. Settable at runtime through the custom
+// `mock_setRecordCount` method, because the rebind guard depends on a wallet holding
+// records and no single fixed answer can test both the refusal and the allowance.
+const recordCounts = new Map();
 
 const balances = new Map();
 const nonces = new Map();
@@ -45,6 +51,13 @@ const at = (address) => String(address || '').toLowerCase();
 
 function handle(message) {
   switch (message.method) {
+    // A test hook, not a chain method. Lets a suite say "this wallet owns two records"
+    // without needing a real mint — which is what the rebind guard turns on.
+    case 'mock_setRecordCount': {
+      const [address, count] = message.params || [];
+      recordCounts.set(String(address).toLowerCase(), Number(count));
+      return true;
+    }
     case 'eth_chainId':
       return hex(11155111);
     case 'net_version':
@@ -119,6 +132,12 @@ function handle(message) {
       }
       if (which === selector('canAccess')) {
         return READS.encodeFunctionResult('canAccess', [false]);
+      }
+      if (which === selector('balanceOf')) {
+        const [owner] = READS.decodeFunctionData('balanceOf', data);
+        return READS.encodeFunctionResult('balanceOf', [
+          BigInt(recordCounts.get(String(owner).toLowerCase()) || 0),
+        ]);
       }
       // Unknown call. Zeros of the right shape rather than a bare `0x`, so a read the
       // server does not expect still decodes instead of throwing.

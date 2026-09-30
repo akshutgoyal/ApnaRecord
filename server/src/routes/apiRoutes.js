@@ -23,7 +23,7 @@ import {
   deleteProfile,
 } from '../controllers/profileController.js';
 import { stats } from '../controllers/statsController.js';
-import { enrol, getWallet, lookupWallets, requestDrip, dripperHealth } from '../controllers/walletController.js';
+import { enrol, getWallet, lookupWallets, requestDrip, dripperHealth, rebind } from '../controllers/walletController.js';
 import { sendCode, checkCode } from '../controllers/identityController.js';
 import { requireConsent } from '../middleware/consentGate.js';
 
@@ -46,6 +46,9 @@ router.post('/identity/email/verify', checkCode);
 router.post('/wallet/enrol', enrol);
 // Find your wallets from a verified email address. Replaces looking one up by address.
 router.post('/wallet/lookup', lookupWallets);
+// Move a wallet to a new key while it still holds nothing. Declared before the
+// `:address` routes so the literal path is never read as an address.
+router.post('/wallet/rebind', rebind);
 router.post('/wallet/:address/drip', requestDrip);
 router.get('/wallet/:address', getWallet);
 

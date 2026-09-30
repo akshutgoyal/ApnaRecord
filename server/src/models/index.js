@@ -109,7 +109,7 @@ const EnrolmentSchema = new mongoose.Schema(
     // usually is.
     identity: {
       kind: { type: String, default: 'email', enum: ['email'] },
-      emailHmac: { type: String, default: '', index: true },
+      emailHmac: { type: String, default: '' },
       emailMasked: { type: String, default: '' },
       verifiedAt: { type: Date, default: null },
     },
@@ -121,6 +121,25 @@ const EnrolmentSchema = new mongoose.Schema(
     },
   },
   { timestamps: true }
+);
+
+/**
+ * ONE EMAIL, ONE WALLET.
+ *
+ * `address` was already unique, so a wallet could not be duplicated. Nothing stopped
+ * the reverse: the same email bound to unlimited wallets, each taking a 0.01 ETH drip
+ * at enrolment. The only ceiling was the global daily cap, which is a budget rather
+ * than a control — it decides how fast the float drains, not whether it is farmable.
+ *
+ * PARTIAL, because rows that predate this have `emailHmac: ''` and would all collide
+ * on the empty string. `partialFilterExpression` cannot express "not empty" (`$ne` is
+ * unsupported), but every real value is a 64-character hex digest, so `$gt: ''` admits
+ * exactly the rows that have one and ignores the rest. A missing field does not match
+ * `$gt` either, which is the behaviour we want.
+ */
+EnrolmentSchema.index(
+  { 'identity.emailHmac': 1 },
+  { unique: true, partialFilterExpression: { 'identity.emailHmac': { $gt: '' } } }
 );
 
 /**
@@ -218,6 +237,38 @@ OneShotSchema.index({ bucket: 1, key: 1 }, { unique: true });
 OneShotSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 /**
+ * HOW MANY TIMES ONE CONTACT MAY BE FUNDED.
+ *
+ * Enrolment funds a wallet immediately, and there is also a top-up path for a clinician
+ * who burns through their allowance. Both draw on the same float, and both were gated
+ * only by a floor check — "does this address have enough?" — which is a question about
+ * a wallet, not about a person.
+ *
+ * That is farmable. Create a wallet, take a drip, rebind to a fresh address (which has
+ * a zero balance and so passes the floor check), take another. The floor check cannot
+ * see that the same person is asking.
+ *
+ * So the count lives against the CONTACT, which is the only handle we have on a person.
+ * A COUNT rather than a wei total, because wei does not fit in a JavaScript number and
+ * an atomic comparison of decimal strings in MongoDB is not something to attempt.
+ *
+ * The `$lt` in the filter plus `upsert` plus the unique index is what makes this
+ * correct: a caller at the cap cannot match the filter, the upsert then collides with
+ * the unique index, and the duplicate-key error IS the refusal. A read-then-write would
+ * let two simultaneous drips both pass.
+ */
+const DripLedgerSchema = new mongoose.Schema(
+  {
+    contactHmac: { type: String, required: true, unique: true },
+    address: { type: String, default: '' },
+    dripCount: { type: Number, default: 0 },
+    txHash: { type: String, default: '' },
+    at: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
+
+/**
  * The dripper's nonce counter — one document, keyed by the float's address.
  *
  * This exists because a promise chain only serialises sends INSIDE one process. Two
@@ -249,6 +300,8 @@ export const ContactGrantModel =
 export const RateLimitModel = mongoose.models.RateLimit || mongoose.model('RateLimit', RateLimitSchema);
 export const OneShotModel = mongoose.models.OneShot || mongoose.model('OneShot', OneShotSchema);
 export const DripperModel = mongoose.models.Dripper || mongoose.model('Dripper', DripperSchema);
+export const DripLedgerModel =
+  mongoose.models.DripLedger || mongoose.model('DripLedger', DripLedgerSchema);
 
 export const allModels = [
   RecordModel,
@@ -261,4 +314,5 @@ export const allModels = [
   RateLimitModel,
   OneShotModel,
   DripperModel,
+  DripLedgerModel,
 ];

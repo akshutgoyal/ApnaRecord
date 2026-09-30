@@ -7,6 +7,10 @@
 export const ABI = [
   // reads the server performs
   "function ownerOf(uint256 tokenId) view returns (address)",
+  // How many records an address owns. The rebind guard turns on this: a wallet holding
+  // a soulbound record cannot be moved to a new key, because the record could not
+  // follow it.
+  "function balanceOf(address owner) view returns (uint256)",
   "function viewRecord(uint256 tokenId) view returns (string)",
   "function canAccess(uint256 tokenId, address viewer) view returns (bool)",
   "function consent(uint256, address) view returns (uint64)",

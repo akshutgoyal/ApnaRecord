@@ -216,10 +216,11 @@ try {
 
 // ----------------------------------------------------------------- suites
 
-const suiteEnv = { API_URL: API, API_URL_2: API_2, MOCK_LOG: chainLog };
+const suiteEnv = { API_URL: API, API_URL_2: API_2, MOCK_LOG: chainLog, CHAIN };
 await runSuite('Unit — email addresses, codes, relay adapters', 'unit/email.test.mjs', {});
 await runSuite('Integration — email verification over HTTP', 'integration/contact.test.mjs', suiteEnv);
 await runSuite('Integration — wallet enrolment and funding', 'integration/wallet.test.mjs', suiteEnv);
+await runSuite('Integration — binding: one contact, one wallet', 'integration/binding.test.mjs', suiteEnv);
 await runSuite('Integration — hardening: signatures, limits, CORS', 'integration/hardening.test.mjs', suiteEnv);
 await runSuite('Integration — the dripper across two instances', 'integration/dripper.test.mjs', suiteEnv);
 

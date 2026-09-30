@@ -23,12 +23,16 @@
 //      signups keep succeeding and writes start failing.
 
 import { ethers } from 'ethers';
-import { EnrolmentModel, DripperModel, isDbReady } from '../models/index.js';
+import { EnrolmentModel, DripperModel, DripLedgerModel, isDbReady } from '../models/index.js';
 
 const AMOUNT = ethers.parseEther(process.env.DRIP_AMOUNT || '0.01');
 const FLOOR = ethers.parseEther(process.env.DRIP_FLOOR || '0.003');
 const DAILY_CAP = ethers.parseEther(process.env.DRIP_DAILY_CAP || '1.0');
 const LOW_WATER = ethers.parseEther(process.env.DRIP_LOW_WATER || '0.05');
+// How many times ONE CONTACT may be funded across its whole life: the first at
+// enrolment, the rest as top-ups. Three covers a clinician who genuinely burns through
+// their allowance without turning the float into a tap.
+const MAX_PER_CONTACT = Number(process.env.DRIP_MAX_PER_CONTACT) || 3;
 
 let wallet = null;
 let chain = Promise.resolve();
@@ -176,7 +180,7 @@ export async function dripperStatus() {
  * an enrolment can still succeed when the drip is skipped — the wallet is created
  * either way, and a user with a wallet but no gas is a recoverable state.
  */
-export async function ensureFunded(address, { reason = 'enrolment' } = {}) {
+export async function ensureFunded(address, { reason = 'enrolment', contactHmac = null } = {}) {
   if (!dripEnabled()) {
     return { ok: false, skipped: true, reason: 'dripper not configured' };
   }
@@ -196,18 +200,64 @@ export async function ensureFunded(address, { reason = 'enrolment' } = {}) {
       return { ok: true, skipped: true, reason: 'already funded', balanceEth: ethers.formatEther(balance) };
     }
 
+    // HOW MANY TIMES THIS PERSON MAY BE FUNDED.
+    //
+    // Claimed BEFORE sending, and claimed atomically. The filter `dripCount < cap` plus
+    // `upsert` plus the unique index on the contact means a caller at the cap cannot
+    // match, the upsert collides, and the duplicate-key error IS the refusal. A read
+    // followed by a send would let two requests in the same window both pass.
+    let claimed = false;
+    if (contactHmac) {
+      try {
+        const ledger = await DripLedgerModel.findOneAndUpdate(
+          { contactHmac, dripCount: { $lt: MAX_PER_CONTACT } },
+          {
+            $inc: { dripCount: 1 },
+            $set: { address: address.toLowerCase(), at: new Date() },
+            $setOnInsert: { contactHmac },
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+        claimed = Boolean(ledger);
+      } catch (error) {
+        if (error?.code === 11000) {
+          return {
+            ok: false,
+            skipped: true,
+            reason: `this contact has already been funded the maximum ${MAX_PER_CONTACT} time(s)`,
+          };
+        }
+        throw error;
+      }
+    }
+
+    /**
+     * Give the claim back, so a transient failure does not consume someone's allowance.
+     * A contact whose drip was burned by an RPC hiccup has no way to get it back.
+     */
+    const releaseClaim = async () => {
+      if (!claimed) return;
+      try {
+        await DripLedgerModel.updateOne({ contactHmac }, { $inc: { dripCount: -1 } });
+      } catch {
+        /* the claim stands; the allowance is simply one lower */
+      }
+    };
+
     const spent = await spentToday();
     if (spent + AMOUNT > DAILY_CAP) {
       console.warn(
         `[Dripper] Daily cap reached (${ethers.formatEther(spent)} spent). ` +
           `Refusing to fund ${address}.`
       );
+      await releaseClaim();
       return { ok: false, skipped: true, reason: 'daily cap reached', spentEth: ethers.formatEther(spent) };
     }
 
     const floatBalance = await w.provider.getBalance(w.address);
     if (floatBalance < AMOUNT) {
       warnIfLow(floatBalance);
+      await releaseClaim();
       return {
         ok: false,
         skipped: true,
@@ -216,8 +266,20 @@ export async function ensureFunded(address, { reason = 'enrolment' } = {}) {
       };
     }
 
-    const txHash = await send(address, AMOUNT);
+    let txHash;
+    try {
+      txHash = await send(address, AMOUNT);
+    } catch (error) {
+      // The send failed. Hand the claim back, because a contact whose one drip was
+      // burned by an RPC hiccup has no way to recover it.
+      await releaseClaim();
+      throw error;
+    }
     warnIfLow(floatBalance - AMOUNT);
+
+    if (claimed) {
+      await DripLedgerModel.updateOne({ contactHmac }, { $set: { txHash } });
+    }
 
     if (reason === 'top-up') {
       await EnrolmentModel.updateOne({ address: address.toLowerCase() }, { $inc: { 'drip.topUps': 1 } });
