@@ -1,0 +1,43 @@
+AAROGYACHAIN DEMO RECORD — DE-IDENTIFIED TEACHING CASE
+=======================================================
+Patient label on-chain : Patient 101
+Record type            : XRAY
+Source                 : Prabhu SM, Choudhury SR, Solanki RS, Shetty GS, Agarwala S.
+                         "Inadvertent chest tube insertion in congenital cystic
+                         adenomatoid malformation and congenital lobar emphysema."
+                         Indian Journal of Radiology and Imaging, Jan 2013.
+                         Open access via PubMed Central, article PMC3737621,
+                         Figure 3 (A, B). Used here as a teaching case with
+                         attribution; all identifiers removed.
+Figure file            : chest-xray-figure3.jpg (same folder, panels A+B)
+
+EXAMINATION
+-----------
+Chest radiograph, frontal view (Panel A).
+CT chest, axial section, lung window (Panel B).
+
+CLINICAL NOTE
+-------------
+3-month-old infant presenting with respiratory distress.
+
+FINDINGS
+--------
+Chest radiograph shows a cystic hyperlucent left lung field with visible
+septations (arrow) and mass effect with mediastinal shift. Appearances were
+initially mistaken for a pneumatocele and a chest tube was inserted.
+
+CT chest axial section with lung window shows a thin-walled cyst in the left
+lower lobe with mass effect. No pneumothorax. No pleural effusion.
+
+IMPRESSION
+----------
+Congenital cystic adenomatoid malformation (CCAM), type 1, left lower lobe.
+Diagnosis confirmed after surgery on histopathology in the source study.
+
+TEACHING NOTE (from the source study)
+-------------------------------------
+CCAM involving the lower lobes can resemble a pneumothorax by showing lucency
+across the lung field; the presence of septations within the cystic lucent
+lesion, visible vascular markings, and relative sparing of the apical region
+point toward CCAM. CT was diagnostic in all study cases and helped localise
+the lesion and detect chest-tube position.

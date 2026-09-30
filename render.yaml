@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: apnarecord-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node src/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: MASTER_KEY
+        sync: false
+      - key: SEPOLIA_RPC_URL
+        value: https://ethereum-sepolia-rpc.publicnode.com
+      - key: CONTRACT_ADDRESS
+        value: 0x464e6963cE0D833193C83Fc8Bd081614B9344b03
+      - key: CONTRACT_DEPLOY_BLOCK
+        value: 11714309
+      # Uploads are wiped on every redeploy without a persistent disk. Mount one
+      # at /opt/apnarecord/uploads and uncomment, or accept re-uploads.
+      # - key: UPLOAD_DIR
+      #   value: /opt/apnarecord/uploads

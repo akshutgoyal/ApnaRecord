@@ -1,0 +1,272 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ApnaRecord base layer.
+ *
+ * Two shells, one palette:
+ *   in  — the public site (ink #0C2431)
+ *   app — every dashboard (paper #FAF6EE)
+ *
+ * Light only, deliberately. There is no dark mode to toggle: the marketing
+ * surface is dark and the product surface is light, and that split is the design
+ * rather than a preference.
+ */
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-paper text-ink antialiased;
+  }
+
+  :root {
+    color-scheme: light;
+  }
+
+  /* Numbers line up in tables and KPI cards, always. */
+  .tabular-nums,
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Warm focus ring everywhere, so keyboard navigation is obvious on paper. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-peacock-500/45 ring-offset-1 ring-offset-paper;
+  }
+
+  ::selection {
+    background: #FAE9BE;
+    color: #0C2431;
+  }
+}
+
+@layer components {
+  /* ------------------------------------------------------------- surfaces */
+  .card {
+    @apply rounded-xl border border-line bg-white shadow-card;
+  }
+
+  .card-pad {
+    @apply p-5;
+  }
+
+  .label {
+    @apply mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+
+  /* ---------------------------------------------------------------- forms */
+  .input {
+    @apply w-full rounded-lg border border-line-strong bg-white px-3 py-2 text-sm text-ink
+           placeholder:text-slate-400 focus:border-peacock-500 focus:outline-none
+           focus:ring-2 focus:ring-peacock-500/20;
+  }
+
+  /* -------------------------------------------------------------- buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm
+           font-medium transition focus:outline-none focus-visible:ring-2
+           focus-visible:ring-peacock-500/45 focus-visible:ring-offset-1
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-peacock-600 text-white hover:bg-peacock-700 focus-visible:ring-peacock-500/45;
+  }
+
+  .btn-secondary {
+    @apply btn border border-line-strong bg-white text-ink hover:bg-slate-50
+           focus-visible:ring-peacock-500/30;
+  }
+
+  .btn-danger {
+    @apply btn bg-error-600 text-white hover:bg-error-700 focus-visible:ring-error-600/40;
+  }
+
+  .btn-ghost {
+    @apply btn text-slate-600 hover:bg-slate-100 hover:text-ink;
+  }
+
+  /* The landing page's only filled accent. Reserved for the ink shell, where
+   * marigold clears AA comfortably (≈6.5:1); on paper it is fills-only. */
+  .btn-accent {
+    @apply btn bg-marigold-400 text-ink-950 shadow-sticker-sm hover:brightness-[1.06];
+  }
+
+  /* --------------------------------------------------------------- badges */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-institutional border border-line bg-slate-50
+           px-2 py-0.5 text-[11px] font-medium text-slate-600;
+  }
+
+  .mono {
+    @apply font-mono text-[11px] tracking-tight;
+  }
+
+  /* --------------------------------------------------- status token system
+   * Six states, one vocabulary, identical on the landing page and in all four
+   * consoles. Each token is icon/text + tint — never colour alone, because a
+   * teal-vs-amber distinction is exactly what colourblind users lose.
+   */
+  .status {
+    @apply inline-flex items-center gap-1.5 rounded-institutional px-2 py-0.5
+           text-[11px] font-semibold ring-1 ring-inset;
+  }
+  .status-active {
+    @apply status bg-peacock-50 text-peacock-700 ring-peacock-200;
+  }
+  .status-pending {
+    @apply status bg-marigold-50 text-marigold-700 ring-marigold-200;
+  }
+  .status-expiring {
+    @apply status bg-marigold-50 text-marigold-700 ring-marigold-200 tabular-nums;
+  }
+  .status-expired {
+    @apply status bg-slate-100 text-slate-600 ring-slate-200;
+  }
+  .status-denied {
+    @apply status bg-error-50 text-error-700 ring-error-200;
+  }
+  .status-revoked {
+    @apply status bg-white text-error-700 ring-error-200;
+  }
+}
+
+@layer utilities {
+  /* ---------------------------------------------------------- backgrounds */
+  .bg-dots-light {
+    background-image: radial-gradient(rgba(12, 36, 49, 0.14) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  .bg-dots-dark {
+    background-image: radial-gradient(rgba(245, 239, 226, 0.13) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* A jaali-style lattice: the ornament is a measured rule pattern, not a
+   * mandala. Kept at 4–6% so it reads as texture, never decoration. */
+  .bg-jali {
+    background-image:
+      repeating-linear-gradient(45deg, rgba(245, 239, 226, 0.06) 0 1px, transparent 1px 22px),
+      repeating-linear-gradient(-45deg, rgba(245, 239, 226, 0.06) 0 1px, transparent 1px 22px);
+  }
+
+  .bg-jali-light {
+    background-image:
+      repeating-linear-gradient(45deg, rgba(12, 36, 49, 0.05) 0 1px, transparent 1px 22px),
+      repeating-linear-gradient(-45deg, rgba(12, 36, 49, 0.05) 0 1px, transparent 1px 22px);
+  }
+
+  /* A file-rule under a section eyebrow — the certificate cue. */
+  .rule-double {
+    background-image: linear-gradient(
+      to right,
+      currentColor 0 0.4rem,
+      transparent 0.4rem 0.55rem,
+      currentColor 0.55rem 100%
+    );
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    background-position: 0 100%;
+  }
+
+  /* -------------------------------------------------------------- motion */
+  @keyframes drift {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes drift-late {
+    0%,
+    100% {
+      transform: translateY(-6px);
+    }
+    50% {
+      transform: translateY(6px);
+    }
+  }
+
+  @keyframes dash-crawl {
+    to {
+      stroke-dashoffset: -28;
+    }
+  }
+
+  @keyframes live-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.45;
+      transform: scale(0.82);
+    }
+  }
+
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-drift {
+    animation: drift 7s ease-in-out infinite;
+  }
+
+  .animate-drift-late {
+    animation: drift-late 8s ease-in-out infinite;
+  }
+
+  .route-dash {
+    stroke-dasharray: 6 8;
+    animation: dash-crawl 1.6s linear infinite;
+  }
+
+  /* The one marigold dot that means "live". */
+  .live-dot {
+    animation: live-pulse 1.9s ease-in-out infinite;
+  }
+
+  /* Scroll reveal, driven by the useReveal hook. Content is visible by default
+   * so a JS failure never hides the page. */
+  .reveal {
+    opacity: 1;
+  }
+  .reveal-pending {
+    opacity: 0;
+  }
+  .reveal-in {
+    animation: rise-in 0.5s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+
+  /* Motion budget: three movements in the whole product. Everything else is
+   * instant, and anyone who has asked for less motion gets none of it. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+    .reveal-pending {
+      opacity: 1;
+    }
+  }
+}
