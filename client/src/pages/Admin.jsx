@@ -91,8 +91,28 @@ export default function Admin() {
           newIdentity.facility.trim() !== '' ? newIdentity.facility.trim() : '';
         if (facility && !isAddress(facility)) throw new Error('Not a valid facility address.');
         // Staff carry the caller's facility; a patient is global (empty facility).
-        const tx = await writeAs('createIdentity', [newIdentity.address, facility || '0x0000000000000000000000000000000000000000']);
-        await tx.wait();
+        //
+        // `createIdentity` is create-only and reverts `IdentityExists` for an identity that
+        // is already registered. That must not abort the rest of this: the label lives
+        // off-chain and is written by the call below, which the server allows for an
+        // existing row. Coupling the two meant that once an identity was on chain with no
+        // label — because an earlier mirror write was refused — there was no way to attach
+        // one, and re-running this form died on chain before reaching it. That is exactly
+        // how three identities ended up registered with empty labels.
+        //
+        // Only this one revert is tolerated. Anything else is a real failure.
+        try {
+          const tx = await writeAs('createIdentity', [
+            newIdentity.address,
+            facility || '0x0000000000000000000000000000000000000000',
+          ]);
+          await tx.wait();
+        } catch (error) {
+          const text = [error?.shortMessage, error?.reason, error?.message, error?.info?.error?.message]
+            .filter(Boolean)
+            .join(' ');
+          if (!/IdentityExists/i.test(text)) throw error;
+        }
         // The label lives off-chain now: the event carries no name.
         const timestamp = Date.now();
         const signature = await signMessage(
