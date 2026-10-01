@@ -242,6 +242,7 @@ await runSuite('Contract — the account, executed on a real EVM', 'contract/acc
 await runSuite('Contract — ApnaRecord, executed on a real EVM', 'contract/apnarecord.test.mjs', {});
 await runSuite('Unit — email addresses, codes, relay adapters', 'unit/email.test.mjs', {});
 await runSuite('Unit — directory wire formats', 'unit/directory.test.mjs', {});
+await runSuite('Unit — the indexer link fold', 'unit/indexer.test.mjs', {});
 await runSuite('Integration — email verification over HTTP', 'integration/contact.test.mjs', suiteEnv);
 await runSuite('Integration — wallet enrolment and funding', 'integration/wallet.test.mjs', suiteEnv);
 await runSuite('Integration — binding: one contact, one wallet', 'integration/binding.test.mjs', suiteEnv);

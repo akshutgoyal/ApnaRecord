@@ -12,8 +12,46 @@
 // Connection handling is deliberately NOT here. The caller decides whether to open its
 // own connection and close it, because the API already has one and the CLI does not.
 
-import { identities, events, recordMeta, call } from './chain.js';
+import { identities, events, recordMeta, call, blockTimestamps } from './chain.js';
 import { IdentityModel, ChainEventModel, RecordModel, PatientLinkModel } from '../models/index.js';
+
+const LINK_EVENT_NAMES = ['PatientLinkRequested', 'PatientLinked', 'PatientUnlinked'];
+
+/**
+ * Fold link events into the writes that collapse them to one row per pair.
+ *
+ * Pure, and exported, because the bug this replaces was invisible: every event was
+ * applied and the wrong one won, so the only symptom was a hospital console showing
+ * nobody. Returning the writes rather than performing them is what makes the ordering
+ * assertable without a chain.
+ *
+ * The events arrive in the order `events()` returns them — NEWEST FIRST — and are
+ * reversed here rather than at the call site. That is deliberate: the ordering IS the
+ * rule, and a function that quietly depends on its caller to get it right is one whose
+ * test passes while the deployment is wrong.
+ */
+export function foldLinkEvents(linkEvents, linkTimes = {}) {
+  const writes = [];
+  for (const event of [...linkEvents].reverse()) {
+    const args = event.args || {};
+    if (!args.facility || !args.patient) continue;
+    const key = {
+      facility: String(args.facility).toLowerCase(),
+      patient: String(args.patient).toLowerCase(),
+    };
+    const iso = linkTimes[event.blockNumber];
+    const at = iso ? new Date(iso) : null;
+    if (event.name === 'PatientLinkRequested') {
+      writes.push({ key, set: { state: 'requested', ...(at ? { requestedAt: at } : {}) } });
+    } else if (event.name === 'PatientLinked') {
+      // `endedAt` is cleared: a readmitted patient must not still carry a discharge date.
+      writes.push({ key, set: { state: 'linked', endedAt: null, ...(at ? { consentedAt: at } : {}) } });
+    } else if (event.name === 'PatientUnlinked') {
+      writes.push({ key, set: { state: 'ended', ...(at ? { endedAt: at } : {}) } });
+    }
+  }
+  return writes;
+}
 
 /**
  * One pass. Returns what it mirrored.
@@ -91,42 +129,33 @@ export async function runIndexer({ log = () => {} } = {}) {
   log(`  events       ${eventCount} mirrored`);
 
   // ---- patient links ------------------------------------------------------
-  // Linked/requested/ended states mirror the link events. The server is the only
-  // place the CURRENT state is cheap to ask — the chain holds the edges as
-  // booleans, and this folds them into one row per pair.
-  let linkCount = 0;
-  for (const event of chainEvents) {
-    const args = event.args || {};
-    if (event.name === 'PatientLinkRequested' && args.facility && args.patient) {
-      await PatientLinkModel.findOneAndUpdate(
-        { facility: String(args.facility).toLowerCase(), patient: String(args.patient).toLowerCase() },
-        { $set: { state: 'requested', requestedAt: new Date() }, $setOnInsert: { consentedAt: null, endedAt: null } },
-        { upsert: true }
-      );
-      linkCount++;
-    } else if (event.name === 'PatientLinked' && args.facility && args.patient) {
-      await PatientLinkModel.findOneAndUpdate(
-        { facility: String(args.facility).toLowerCase(), patient: String(args.patient).toLowerCase() },
-        { $set: { state: 'linked', consentedAt: new Date() } },
-        { upsert: true }
-      );
-      linkCount++;
-    } else if (event.name === 'PatientUnlinked' && args.facility && args.patient) {
-      await PatientLinkModel.findOneAndUpdate(
-        { facility: String(args.facility).toLowerCase(), patient: String(args.patient).toLowerCase() },
-        { $set: { state: 'ended', endedAt: new Date() } },
-        { upsert: true }
-      );
-      linkCount++;
-    }
+  //
+  // Folded into one row per pair, so the current state is cheap to ask. Two things
+  // here are load-bearing:
+  //
+  //   * `events()` returns the log NEWEST FIRST. Folding in that order inverts the
+  //     outcome — a pair that was requested and then consented ends back at
+  //     "requested", because the OLDEST event is applied last. `linkedPatientsOf`
+  //     reads `state: 'linked'` to decide a hospital's read scope, so the console
+  //     would show an empty patient list while the contract says otherwise. The fold
+  //     runs ascending, the only order in which the last event wins.
+  //   * Timestamps come from the block, not `new Date()`. The indexer re-reads the
+  //     same window on every pass, so wall-clock time would reset "consented" to
+  //     just-now on each run and the ledger could never show an age.
+  const linkEvents = chainEvents.filter((e) => LINK_EVENT_NAMES.includes(e.name));
+  const linkTimes = await blockTimestamps(linkEvents.map((e) => e.blockNumber));
+  const linkWrites = foldLinkEvents(linkEvents, linkTimes);
+
+  for (const write of linkWrites) {
+    await PatientLinkModel.findOneAndUpdate(write.key, { $set: write.set }, { upsert: true });
   }
-  log(`  links        ${linkCount} mirrored`);
+  log(`  links        ${linkWrites.length} mirrored`);
 
   return {
     identities: chainIdentities.length,
     records: recordCount,
     events: eventCount,
-    links: linkCount,
+    links: linkWrites.length,
     at: new Date().toISOString(),
   };
 }
