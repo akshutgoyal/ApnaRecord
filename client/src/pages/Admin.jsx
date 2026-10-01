@@ -502,7 +502,11 @@ export default function Admin() {
 
         <Card
           title="Registered identities"
-          subtitle={`${identities.length} found in the IdentityCreated log`}
+          subtitle={
+            loadError
+              ? `${identities.length} from the last successful read · not current`
+              : `${identities.length} found in the IdentityCreated log`
+          }
         >
           {loadError && (
             <Callout tone="danger" title="Could not read from the backend">
@@ -512,6 +516,20 @@ export default function Admin() {
           {loading && !loadError && <SkeletonRows rows={4} columns={3} />}
           {!loadError && !loading && identities.length === 0 && (
             <EmptyState title="No identities registered yet" hint="Register one above to begin." />
+          )}
+          {/*
+            The rows stay on screen after a failed reload, and that is deliberate — they
+            are real, just not current, and blanking the panel would throw away information
+            the operator wants. What was wrong is that they were rendered as though nothing
+            had gone wrong: this branch was the only one that did not test `loadError`, so a
+            failed read showed an error and a full list at once, with nothing saying which
+            was true. The subtitle and the note below now say it.
+          */}
+          {loadError && identities.length > 0 && (
+            <p className="mb-2 text-xs leading-relaxed text-slate-600">
+              The list below is the last successful read, kept so a backend blip does not empty
+              the panel. It may be out of date.
+            </p>
           )}
           {identities.length > 0 && (
             <ul className="divide-y divide-line">
