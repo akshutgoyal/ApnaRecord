@@ -733,11 +733,35 @@ export function ChainProvider({ children }) {
 
     syncAccounts();
 
+    // Drop the cached provider so the next read re-detects the network.
+    //
+    // `BrowserProvider` caches the chain it saw on first use, so re-reading through the
+    // same instance keeps answering with the OLD one. That made the "Wrong network"
+    // banner permanent: switching to Base Sepolia in MetaMask left the page insisting the
+    // wallet was elsewhere, and telling the user to do the thing they had just done. The
+    // poll did not save it either, because it read through the same stale instance.
+    //
+    // Clearing it is enough — a fresh BrowserProvider calls eth_chainId again.
+    const reDetectNetwork = () => {
+      providerRef.current = null;
+    };
+
     const onAccountsChanged = () => syncAccounts();
-    const onChainChanged = () => syncAccounts();
-    const onFocus = () => refresh();
+    const onChainChanged = () => {
+      reDetectNetwork();
+      syncAccounts();
+    };
+    const onFocus = () => {
+      // Also re-detect here: a switch made while the tab was in the background can miss
+      // the `chainChanged` event entirely, and focus is when the user comes back to look.
+      reDetectNetwork();
+      refresh();
+    };
     const onVisible = () => {
-      if (document.visibilityState === 'visible') refresh();
+      if (document.visibilityState === 'visible') {
+        reDetectNetwork();
+        refresh();
+      }
     };
 
     window.ethereum.on?.('accountsChanged', onAccountsChanged);
