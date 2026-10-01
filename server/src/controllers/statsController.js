@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { ProfileModel, isDbReady } from '../models/index.js';
+import { ProfileModel, RequestModel, RecordModel, isDbReady } from '../models/index.js';
 import {
   identities,
   events,
@@ -35,6 +35,11 @@ const short = (address) =>
  * Each row carries enough context to be rendered on its own — record type,
  * patient, and the viewer's registered label — so a dashboard never has to join
  * three arrays in the browser to describe one window.
+ *
+ * `canAccess` is the ONLY route: the consent mapping is private, so there is no
+ * timestamp to read. Rows therefore carry `active` but no `expiresAt` — a window
+ * that is open is reported as open, and countdowns are drawn from the grant
+ * events' `expiresAt` argument instead (see consentProvenance below).
  */
 async function consentMatrix(records, candidateViewers, labels = {}) {
   const rows = [];
@@ -42,17 +47,15 @@ async function consentMatrix(records, candidateViewers, labels = {}) {
     for (const viewer of candidateViewers) {
       try {
         const [allowed] = await call('canAccess', [record.tokenId, viewer]);
-        const [expiryRaw] = await call('consent', [record.tokenId, viewer]);
-        const expiry = Number(expiryRaw);
-        if (!allowed && expiry === 0) continue;
+        if (!allowed) continue;
         rows.push({
           tokenId: record.tokenId,
           recordType: record.recordType,
           patient: record.patient,
           viewer,
           viewerLabel: labels[String(viewer).toLowerCase()] || null,
-          active: allowed,
-          expiresAt: expiry || null,
+          active: true,
+          expiresAt: null,
         });
       } catch {
         /* skip */
@@ -79,6 +82,29 @@ export async function stats(req, res) {
     // A dashboard's refresh button should mean "read the chain again", not
     // "re-read the cache I just served". ?fresh=1 pays the six seconds on purpose.
     const wantsFresh = req.query?.fresh === '1' || req.query?.fresh === 'true';
+    const facility = (req.query?.facility || '').trim();
+
+    // Scoped reads bypass the shared cache: the cache is the whole platform,
+    // and a hospital must never be served another facility's numbers from it.
+    if (facility) {
+      try {
+        const { linkedPatientsOf } = await import('../lib/facilityScope.js');
+        const patients = (await linkedPatientsOf(facility)).map((p) => p.toLowerCase());
+        const payload = await computeStats();
+        return res.json({
+          ...applyFacilityScope(payload, new Set(patients)),
+          cached: false,
+          stale: false,
+          cacheAgeMs: 0,
+          facility: facility.toLowerCase(),
+          scoped: true,
+        });
+      } catch (error) {
+        return res
+          .status(error.status || 502)
+          .json({ error: error.error || 'StatsUnavailable', message: error.message });
+      }
+    }
 
     if (cache.payload && !wantsFresh) {
       const ageMs = Date.now() - cache.at;
@@ -121,6 +147,57 @@ export async function warmStats() {
   }
 }
 
+/**
+ * Narrow a computed payload to one facility's read scope: records whose patient
+ * is currently linked to it, and the consents, requests and patient rows that
+ * belong to those records. Chain-wide activity counts stay global — they count
+ * edges, not patients — and are marked as such rather than silently filtered.
+ */
+function applyFacilityScope(payload, patients) {
+  const inScope = (address) => address && patients.has(String(address).toLowerCase());
+  const records = (payload.records || []).filter((r) => inScope(r.patient));
+  const tokenIds = new Set(records.map((r) => r.tokenId));
+  const consents = (payload.consents || []).filter((c) => tokenIds.has(c.tokenId));
+  const requests = (payload.requests || []).filter((r) => inScope(r.patient));
+  const scopedPatients = (payload.patients || []).filter((p) => inScope(p.address));
+  const expiringSoon = (payload.expiringSoon || []).filter((c) => tokenIds.has(c.tokenId));
+  const activeConsents = consents.filter((c) => c.active);
+  const activeViewers = (payload.activeViewers || []).filter((v) =>
+    consents.some((c) => String(c.viewer).toLowerCase() === String(v.address).toLowerCase())
+  );
+
+  const count = (list, key) => {
+    const map = new Map();
+    for (const item of list) {
+      const value = typeof key === 'function' ? key(item) : item[key];
+      map.set(value, (map.get(value) || 0) + 1);
+    }
+    return [...map.entries()].map(([name, value]) => ({ name, value }));
+  };
+
+  return {
+    ...payload,
+    totals: {
+      ...payload.totals,
+      records: records.length,
+      activeConsents: activeConsents.length,
+      expiringSoon: expiringSoon.length,
+      distinctViewers: activeViewers.length,
+      requests: requests.length,
+      openRequests: requests.filter((request) => request.status === 'open').length,
+      identities: scopedPatients.length,
+    },
+    patients: scopedPatients,
+    records,
+    consents,
+    requests,
+    expiringSoon,
+    activeViewers,
+    recordsByType: count(records, (r) => r.recordType || 'UNSPECIFIED'),
+    note: 'Scoped to one facility: records, consents, requests and patient rows for currently linked patients. Activity over time and events by type remain chain-wide.',
+  };
+}
+
 async function computeStats() {
 const [identityList, allEvents, labels, profiles] = await Promise.all([
     identities(),
@@ -154,6 +231,25 @@ const [identityList, allEvents, labels, profiles] = await Promise.all([
     }
   }
   const consents = await consentMatrix(records, [...candidates], labels);
+
+  // The matrix knows what is OPEN; the events know UNTIL WHEN. Overlay the
+  // latest grant's `expiresAt` argument so countdowns and the expiry watchlist
+  // keep working without a readable mapping.
+  const latestGrant = new Map();
+  for (const event of allEvents) {
+    if (event.name !== 'AccessGranted' && event.name !== 'EmergencyAccessUsed') continue;
+    const args = event.args || {};
+    if (args.tokenId === undefined || !args.viewer || args.expiresAt === undefined) continue;
+    const key = `${args.tokenId}|${String(args.viewer).toLowerCase()}`;
+    const prev = latestGrant.get(key);
+    if (!prev || event.blockNumber > prev.blockNumber) {
+      latestGrant.set(key, { blockNumber: event.blockNumber, expiresAt: Number(args.expiresAt) });
+    }
+  }
+  for (const c of consents) {
+    const grant = latestGrant.get(`${c.tokenId}|${String(c.viewer).toLowerCase()}`);
+    if (grant && Number.isFinite(grant.expiresAt)) c.expiresAt = grant.expiresAt;
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const activeConsents = consents.filter((c) => c.active);
@@ -248,48 +344,78 @@ const [identityList, allEvents, labels, profiles] = await Promise.all([
 
   // ---- the request ledger ----------------------------------------------
   //
-  // The contract stores no request state: `requestRecord` only emits an event, and
-  // `RecordMinted` does not echo the requestId it answers. So fulfilment is
-  // DERIVED — the first mint for the same patient and record type at or after the
-  // request's block. That is a sound reading of this contract, and it is labelled
-  // as derived wherever it is shown rather than dressed up as chain-level fact.
+  // The contract stores no request state: `requestRecord` only emits an anchor
+  // (requestId, requester), and `RecordMinted` names only the token and the
+  // digest. Patient, record type and fulfilment all come from the database —
+  // which is what metadata privacy costs, and it is better said than implied.
+  //
+  // Fulfilment is DERIVED — the first mint for the same patient and record type
+  // at or after the request's block. That is a sound reading of this system,
+  // and it is labelled as derived wherever it is shown rather than dressed up
+  // as chain-level fact.
   const mintEvents = allEvents.filter(
     (event) => event.name === 'RecordMinted' && event.args?.tokenId !== undefined
   );
   const requestEvents = allEvents.filter((event) => event.name === 'RecordRequested');
 
+  // The contents behind each anchor. Without the database these are anchors
+  // only — the request happened, and who made it — rather than full rows.
+  let requestRows = new Map();
+  let mintPatients = new Map();
+  if (isDbReady()) {
+    try {
+      const [dbRequests, dbRecords] = await Promise.all([
+        RequestModel.find().lean().catch(() => []),
+        RecordModel.find().lean().catch(() => []),
+      ]);
+      requestRows = new Map(dbRequests.map((r) => [Number(r.requestId), r]));
+      mintPatients = new Map(dbRecords.map((r) => [Number(r.tokenId), r]));
+    } catch {
+      /* anchors only */
+    }
+  }
+
   const requests = requestEvents
     .map((event) => {
       const args = event.args || {};
-      const patient = String(args.patient || '');
-      const recordType = String(args.recordType || '');
+      const requestId = Number(args.requestId);
       const requester = String(args.requester || '');
+      const row = requestRows.get(requestId);
+      const patient = row ? String(row.patient || '') : '';
+      const recordType = row ? String(row.recordType || '') : '';
 
       const fulfilment =
         mintEvents
-          .filter(
-            (mint) =>
-              String(mint.args.patient || '').toLowerCase() === patient.toLowerCase() &&
-              String(mint.args.recordType || '') === recordType &&
+          .map((mint) => {
+            const tokenId = Number(mint.args.tokenId);
+            const minted = mintPatients.get(tokenId);
+            return { mint, tokenId, minted };
+          })
+          .filter(({ minted }) => {
+            if (!minted || !patient) return false;
+            return (
+              String(minted.patient || '').toLowerCase() === patient.toLowerCase() &&
+              String(minted.recordType || '') === recordType &&
               mint.blockNumber >= event.blockNumber
-          )
-          .sort((a, b) => a.blockNumber - b.blockNumber)[0] || null;
+            );
+          })
+          .sort((a, b) => a.mint.blockNumber - b.mint.blockNumber)[0] || null;
 
       return {
-        requestId: Number(args.requestId),
+        requestId,
         requester,
         requesterLabel: labels[requester.toLowerCase()] || null,
         patient,
-        patientLabel: labels[patient.toLowerCase()] || null,
-        patientName: nameFor(patient),
+        patientLabel: (patient && labels[patient.toLowerCase()]) || null,
+        patientName: patient ? nameFor(patient) : null,
         recordType,
         blockNumber: event.blockNumber,
         txHash: event.txHash,
         requestedAt: times[event.blockNumber] || null,
         status: fulfilment ? 'minted' : 'open',
-        fulfilledByTokenId: fulfilment ? Number(fulfilment.args.tokenId) : null,
-        fulfilledAtBlock: fulfilment ? fulfilment.blockNumber : null,
-        fulfilledAt: fulfilment ? times[fulfilment.blockNumber] || null : null,
+        fulfilledByTokenId: fulfilment ? fulfilment.tokenId : null,
+        fulfilledAtBlock: fulfilment ? fulfilment.mint.blockNumber : null,
+        fulfilledAt: fulfilment ? times[fulfilment.mint.blockNumber] || null : null,
       };
     })
     .sort((a, b) => b.blockNumber - a.blockNumber);

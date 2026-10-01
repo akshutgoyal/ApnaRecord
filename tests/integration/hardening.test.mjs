@@ -107,8 +107,8 @@ check(
   `${notMinting.status} ${notMinting.body.error}`
 );
 check(
-  'and the reason names the on-chain role, not a generic denial',
-  /DEFAULT_ADMIN_ROLE/.test(notMinting.body.message || ''),
+  'and the reason names who can mint, not a generic denial',
+  /platform|hospital/i.test(notMinting.body.message || ''),
   notMinting.body.message
 );
 

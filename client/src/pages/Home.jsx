@@ -29,7 +29,7 @@ const ORBIT_NODES = [
   { x: 50, y: 50, tag: '', label: 'Contract', sub: 'Sepolia', center: true },
   { x: 15, y: 25, tag: 'PP', label: 'Patient', sub: 'record owner' },
   { x: 85, y: 21, tag: 'CD', label: 'Cardiology', sub: 'manager · doctor' },
-  { x: 83, y: 77, tag: 'HI', label: 'Hospital IT', sub: 'admin · minter' },
+  { x: 83, y: 77, tag: 'HI', label: 'Hospital IT', sub: 'hospital · linked patients' },
   { x: 14, y: 75, tag: 'CA', label: 'Compliance', sub: 'auditor' },
 ];
 

@@ -15,7 +15,7 @@ import { getStats, listProfiles } from '../services/api';
 // The third one matters most. A dashboard that cannot say how old it is invites
 // people to trust a number that stopped being true twenty minutes ago.
 
-export function useStats({ autoRefreshMs = 45_000 } = {}) {
+export function useStats({ autoRefreshMs = 45_000, facility } = {}) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -29,7 +29,7 @@ export function useStats({ autoRefreshMs = 45_000 } = {}) {
     inFlight.current = true;
     setRefreshing(true);
     try {
-      const payload = await getStats({ fresh });
+      const payload = await getStats({ fresh, facility });
       setStats(payload);
       setLastUpdated(Date.now());
       setError(null);
@@ -40,7 +40,7 @@ export function useStats({ autoRefreshMs = 45_000 } = {}) {
       setRefreshing(false);
       setLoading(false);
     }
-  }, []);
+  }, [facility]);
 
   useEffect(() => {
     load();

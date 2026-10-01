@@ -33,6 +33,13 @@ const SECTIONS = {
       { to: '/doctor/console', label: 'Records & requests', icon: '⌘' },
     ],
   },
+  hospital: {
+    title: 'Facility',
+    items: [
+      { to: '/hospital', label: 'Dashboard', icon: '▤', end: true },
+      { to: '/hospital/console', label: 'Patients & links', icon: '⌘' },
+    ],
+  },
   auditor: {
     title: 'Audit',
     items: [
@@ -120,6 +127,7 @@ export default function AppShell({ children }) {
   // Every role this wallet holds, so the topbar never contradicts the page.
   const heldRoles = [
     roles.admin && 'Admin',
+    roles.hospital && 'Hospital',
     roles.manager && 'Manager',
     roles.auditor && 'Auditor',
     isPatient && 'Patient',

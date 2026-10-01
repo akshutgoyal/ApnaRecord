@@ -239,7 +239,8 @@ export async function identities() {
       return {
         ...identity,
         // The struct is now (createdAt, active, facility) — the label that used
-        // to sit at index 0 is gone, so every index has shifted.
+        // to sit at index 0 is gone, so every index has shifted. The label is
+        // off-chain now; it is joined from the database below, never the chain.
         active: identityRecord[1],
         createdAt: Number(identityRecord[0]),
         roles: {
@@ -250,7 +251,25 @@ export async function identities() {
       };
     })
   );
-  return out.sort((a, b) => a.registeredAtBlock - b.registeredAtBlock);
+  const sorted = out.sort((a, b) => a.registeredAtBlock - b.registeredAtBlock);
+
+  // Labels live in the database (POST /identities), because the chain refused
+  // to carry them. Joined here so every consumer sees one shape.
+  try {
+    const { IdentityModel, isDbReady } = await import('../models/index.js');
+    if (isDbReady()) {
+      const rows = await IdentityModel.find({
+        account: { $in: sorted.map((i) => i.account.toLowerCase()) },
+      }).lean();
+      const labels = new Map(rows.map((r) => [r.account, r.label || null]));
+      for (const entry of sorted) entry.label = labels.get(entry.account.toLowerCase()) ?? null;
+    } else {
+      for (const entry of sorted) entry.label = null;
+    }
+  } catch {
+    for (const entry of sorted) entry.label = null;
+  }
+  return sorted;
 }
 
 /** The authoritative answer to "what may this wallet do?" */
@@ -266,11 +285,22 @@ export async function permissions(address) {
     call('didFor', [address]),
     call('facilities', [address]),
   ]);
+  let label = null;
+  try {
+    const { IdentityModel, isDbReady } = await import('../models/index.js');
+    if (isDbReady()) {
+      const row = await IdentityModel.findOne({ account: address.toLowerCase() }).lean();
+      label = row?.label || null;
+    }
+  } catch {
+    /* label is a nicety; the roles are not */
+  }
   return {
     address,
     did: did[0],
     identity: {
-      // No label: it is not on-chain any more. The caller joins it from the database.
+      // No label on-chain any more — joined from the database, null without it.
+      label,
       createdAt: Number(identityRecord[0]),
       active: identityRecord[1],
       facility: identityRecord[2],
@@ -414,11 +444,11 @@ export async function blockTimestamps(blockNumbers) {
   return out;
 }
 
-/** Address -> registered label, from the identity log. */
+/** Address -> registered label, from the database. The chain no longer carries it. */
 export async function labelMap() {
   const list = await identities();
   const map = {};
-  for (const entry of list) map[entry.account.toLowerCase()] = entry.label;
+  for (const entry of list) map[entry.account.toLowerCase()] = entry.label || null;
   return map;
 }
 

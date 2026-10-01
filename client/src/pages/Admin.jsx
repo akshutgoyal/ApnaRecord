@@ -3,8 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { isAddress } from 'ethers';
 import { useChain, describeError } from '../chain';
 import { encryptRecord, formatBytes, toBase64 } from '../crypto';
-import { chainIdentities, chainEvents, storeRecord } from '../services/api';
-import { storeMessage } from '../lib/wireMessages';
+import { chainIdentities, chainEvents, storeRecord, recordIdentity, recordFacility } from '../services/api';
+import { storeMessage, identityMessage, facilityMessage } from '../lib/wireMessages';
 import { TX_EXPLORER } from '../contract';
 import { useTx } from '../hooks/useTx';
 import { useToast } from '../components/Toast';
@@ -34,8 +34,9 @@ export default function Admin() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  const [newIdentity, setNewIdentity] = useState({ address: '', label: '' });
+  const [newIdentity, setNewIdentity] = useState({ address: '', label: '', facility: '' });
   const [roleGrant, setRoleGrant] = useState({ address: '', role: 'MANAGER_ROLE' });
+  const [newFacility, setNewFacility] = useState({ it: '', name: '' });
   const [mint, setMint] = useState({ patient: '', recordType: 'MRI_SCAN', file: null });
   const [revokeId, setRevokeId] = useState('');
   const [searchParams] = useSearchParams();
@@ -86,12 +87,47 @@ export default function Admin() {
       async () => {
         if (!isAddress(newIdentity.address)) throw new Error('A valid address is required.');
         if (!newIdentity.label.trim()) throw new Error('A label is required.');
-        const tx = await writeAs('createIdentity', [newIdentity.address, newIdentity.label.trim()]);
+        const facility =
+          newIdentity.facility.trim() !== '' ? newIdentity.facility.trim() : '';
+        if (facility && !isAddress(facility)) throw new Error('Not a valid facility address.');
+        // Staff carry the caller's facility; a patient is global (empty facility).
+        const tx = await writeAs('createIdentity', [newIdentity.address, facility || '0x0000000000000000000000000000000000000000']);
         await tx.wait();
-        setNewIdentity({ address: '', label: '' });
+        // The label lives off-chain now: the event carries no name.
+        const timestamp = Date.now();
+        const signature = await signMessage(
+          identityMessage(newIdentity.address, newIdentity.label.trim(), facility, timestamp)
+        );
+        await recordIdentity({
+          account: newIdentity.address,
+          label: newIdentity.label.trim(),
+          facility,
+          timestamp,
+          signature,
+        });
+        setNewIdentity({ address: '', label: '', facility: '' });
         await load();
       },
-      { successDetail: 'IdentityCreated is now a permanent, public event.' }
+      { successDetail: 'IdentityCreated is now a permanent, public event. The label was recorded off-chain.' }
+    );
+
+  const createFacility = () =>
+    run(
+      'Register facility',
+      async () => {
+        if (!isAddress(newFacility.it)) throw new Error('A valid hospital IT address is required.');
+        if (!newFacility.name.trim()) throw new Error('A facility name is required.');
+        const tx = await writeAs('createFacility', [newFacility.it]);
+        await tx.wait();
+        const timestamp = Date.now();
+        const signature = await signMessage(
+          facilityMessage(newFacility.it, newFacility.name.trim(), timestamp)
+        );
+        await recordFacility({ it: newFacility.it, name: newFacility.name.trim(), timestamp, signature });
+        setNewFacility({ it: '', name: '' });
+        await load();
+      },
+      { successDetail: 'FacilityCreated is on-chain; the name lives in the directory.' }
     );
 
   const grantRole = () =>
@@ -106,7 +142,9 @@ export default function Admin() {
         const roleValue =
           roleGrant.role === 'MANAGER_ROLE'
             ? await reader.MANAGER_ROLE()
-            : await reader.AUDITOR_ROLE();
+            : roleGrant.role === 'HOSPITAL_ROLE'
+              ? await reader.HOSPITAL_ROLE()
+              : await reader.AUDITOR_ROLE();
         const tx = await writeAs('grantRole', [roleValue, roleGrant.address]);
         await tx.wait();
         setRoleGrant((current) => ({ ...current, address: '' }));
@@ -152,12 +190,12 @@ export default function Admin() {
           signature,
         });
 
-        // 3. Only the 32-byte digest goes on-chain.
+        // 3. Only the 32-byte digest goes on-chain. The record type stays in
+        //    the server row from step 2 — it is clinical data on a public log.
         const tx = await writeAs('mintRecord', [
           mint.patient,
           digest,
           `local://${digest.slice(2, 14)}`,
-          mint.recordType,
         ]);
         await tx.wait();
         setMint({ patient: '', recordType: 'MRI_SCAN', file: null });
@@ -230,7 +268,7 @@ export default function Admin() {
 
       {!account && (
         <Callout tone="warn" className="mb-5" title="Connect the admin wallet">
-          Connect MetaMask with the Hospital IT account. If you are using a different account, the
+          Connect MetaMask with the Platform account. If you are using a different account, the
           non-admin revert is worth trying — it is the headline proof.
         </Callout>
       )}
@@ -254,7 +292,7 @@ export default function Admin() {
               value={newIdentity.address}
               onChange={(v) => setNewIdentity((c) => ({ ...c, address: v }))}
             />
-            <Field label="Label" hint="A role title only — never personal data.">
+            <Field label="Label" hint="A role title only — never personal data. Stored off-chain.">
               <input
                 className="input"
                 value={newIdentity.label}
@@ -262,6 +300,13 @@ export default function Admin() {
                 placeholder="e.g., Cardiology"
               />
             </Field>
+            <AddressInput
+              label="Facility (optional)"
+              value={newIdentity.facility}
+              onChange={(v) => setNewIdentity((c) => ({ ...c, facility: v }))}
+              hint="Staff only: the hospital IT wallet. Leave empty for patients and platform identities."
+              showMyAddress={false}
+            />
             <button
               type="button"
               onClick={createIdentity}
@@ -275,7 +320,7 @@ export default function Admin() {
 
         <Card
           title="2 · Grant a role"
-          subtitle="MANAGER for clinicians and labs, AUDITOR for compliance."
+          subtitle="MANAGER for clinicians and labs, AUDITOR for compliance, HOSPITAL for a hospital IT wallet."
         >
           <div className="space-y-3">
             <AddressInput
@@ -284,8 +329,8 @@ export default function Admin() {
               onChange={(v) => setRoleGrant((c) => ({ ...c, address: v }))}
             />
             <Field label="Role">
-              <div className="flex gap-2">
-                {['MANAGER_ROLE', 'AUDITOR_ROLE'].map((role) => (
+              <div className="flex flex-wrap gap-2">
+                {['MANAGER_ROLE', 'AUDITOR_ROLE', 'HOSPITAL_ROLE'].map((role) => (
                   <button
                     key={role}
                     type="button"
@@ -314,8 +359,37 @@ export default function Admin() {
         </Card>
 
         <Card
+          title="3 · Register a facility"
+          subtitle="The hospital IT wallet becomes the facility. The name lives off-chain."
+        >
+          <div className="space-y-3">
+            <AddressInput
+              label="Hospital IT wallet"
+              value={newFacility.it}
+              onChange={(v) => setNewFacility((c) => ({ ...c, it: v }))}
+            />
+            <Field label="Facility name" hint="Stored in the directory, never on-chain.">
+              <input
+                className="input"
+                value={newFacility.name}
+                onChange={(event) => setNewFacility((c) => ({ ...c, name: event.target.value }))}
+                placeholder="e.g., City Care Hospital"
+              />
+            </Field>
+            <button
+              type="button"
+              onClick={createFacility}
+              disabled={isBusy('Register facility')}
+              className="btn-primary w-full"
+            >
+              {isBusy('Register facility') ? <Busy label="Confirming…" /> : 'createFacility'}
+            </button>
+          </div>
+        </Card>
+
+        <Card
           className="lg:col-span-2"
-          title="3 · Mint a record"
+          title="4 · Mint a record"
           subtitle="The file is encrypted in this browser. Only the 32-byte digest reaches the chain."
           tone={isAdmin ? 'default' : 'warn'}
         >

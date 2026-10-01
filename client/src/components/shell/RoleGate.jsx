@@ -65,11 +65,13 @@ export default function RoleGate({ role, children }) {
   const holds =
     role === 'admin'
       ? roles.admin
-      : role === 'doctor'
-        ? roles.manager
-        : role === 'auditor'
-          ? roles.auditor
-          : isPatient;
+      : role === 'hospital'
+        ? roles.hospital
+        : role === 'doctor'
+          ? roles.manager
+          : role === 'auditor'
+            ? roles.auditor
+            : isPatient;
 
   if (!holds) {
     if (primaryRole && primaryRole !== role) {

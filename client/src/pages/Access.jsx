@@ -18,13 +18,14 @@ import Brand from '../components/Brand';
 // but there is no signer, so reads work while writes refuse.
 
 const ROLE_BLURB = {
-  admin: 'Hospital IT — full controls: identities, roles, records.',
+  admin: 'Platform — facilities, identities, roles, records.',
+  hospital: 'Hospital IT — your facility only: patients, staff, records.',
   doctor: 'Clinician — handles records and requests under live consent.',
   auditor: 'Compliance — metadata and the event log, never the file.',
   patient: 'Record owner — your records, your consent, your call.',
 };
 
-const ROLE_ICON = { admin: '⌘', doctor: '✚', auditor: '◍', patient: '☺' };
+const ROLE_ICON = { admin: '⌘', hospital: '🏥', doctor: '✚', auditor: '◍', patient: '☺' };
 
 /** The demo bypass: a persona picker with the four roles. Shown in BOTH walletless states. */
 function DemoPicker({ open, onToggle, busy, onPick }) {

@@ -177,7 +177,7 @@ any single one of them agreeing with the others.
 |---|---|---|
 | **Blockchain** | Owner, roles, the 32-byte record digest, consent windows, every event | Truth. Public, immutable, tamper-proof. If anything disagrees with the chain, the chain wins. |
 | **Server (disk)** | The encrypted file and its sealed content key | The file itself has no business on a ledger. A 500 MB scan costs the same on-chain as a text file. |
-| **MongoDB** | A browse index of identities, records and events, plus patient-chosen display names | Speed only — except the names, which are deliberately off-chain. The index can be dropped and rebuilt from chain logs at any time. |
+| **MongoDB** | A browse index of identities, records, events, links and requests, plus patient-chosen display names | Speed only — except the names, labels, links and request contents, which live ONLY here. The chain-derived rows can be dropped and rebuilt from logs at any time; the directory rows cannot. |
 
 > **Mongo answers quickly. The chain answers truthfully.**
 
@@ -488,10 +488,11 @@ none of this is hardcoded into the role logic.
 
 | Role | Label | Address |
 |---|---|---|
-| Admin | Hospital IT | `0xcd026C498Ed36Ba54A9c42CEC6CbdFE1cFD96608` |
-| Doctor (Manager) | Cardiology | `0x06Ef1262F7Ab61a960b075833ebf655277d823C6` |
-| Auditor | Compliance | `0xF2538724d814ef3900095f6e0fa0DFac8F9ad31d` |
-| Patient | Patient 101 | `0xaC0b57F1bAc3964f13a1b232fB73B553F24Ec51B` |
+| Admin | Platform | `0x436625c20e1f90133c52b6c1728709B295fd82B6` |
+| Hospital IT | Hospital 101 | `0xc089766ad7B4E2835f1955D7f7122242CdDA978C` |
+| Doctor (Manager) | Doctor 101 | `0xF571447d95883AE1b9596bfd8a32D2713a80EA63` |
+| Auditor | Auditor 101 | `0x62A4A7C6dA55aBB06012222F97318B53E784636e` |
+| Patient | Patient 101 | `0x194eFBB518Eb356Edb18B7088a7F13629b241348` |
 
 There is **no login page and no test password** — the wallet is the identity. Connect
 MetaMask to Sepolia and the correct console is offered to you. `/verify` works with no
@@ -517,8 +518,10 @@ and shows only the console that wallet's role entitles it to.
 | `/auditor` | Compliance | Dashboard: metadata-only audit view, event log, audit coverage. **Never the file location** |
 | `/auditor/console` | Compliance | Ledger and feed views of the complete event log |
 | `/patient` | Record owner | Dashboard: your records, who can read them now, activity on your records |
-| `/patient/console` | Record owner | Operations: grant a time-boxed window · revoke · open a record |
+| `/patient/console` | Record owner | Operations: grant a time-boxed window · revoke · open a record · approve/revoke hospital links |
 | `/patient/profile` | Record owner | Your display name and details. Off-chain, signed, deletable |
+| `/hospital` | Hospital IT | Dashboard: linked patients, in-scope records, expiring windows — nothing else |
+| `/hospital/console` | Hospital IT | Operations: request a patient link · discharge · mint for linked patients |
 
 ### Display names, and where they come from
 
@@ -641,8 +644,10 @@ client/                         React 18 + Vite 6 + Tailwind 3 + ethers v6
   vercel.json                   SPA rewrites so /access · /admin · /verify survive refresh
 server/                         Express 4 + Mongoose 8
   src/index.js                  entry — `node src/index.js`, CORS open, 30 MB JSON ceiling for ciphertext
-  src/routes/apiRoutes.js       /api/health · /api/chain/* · /api/records* · /api/audit/:id · /api/verify · /api/stats · /api/profiles* · /api/identity/email/* · /api/wallet/* · /api/dripper
+  src/routes/apiRoutes.js       /api/health · /api/chain/* · /api/records* · /api/audit/:id · /api/verify · /api/stats · /api/profiles* · /api/identity/email/* · /api/wallet/* · /api/dripper · /api/identities · /api/facilities · /api/requests · /api/patients/:address/links
   src/middleware/consentGate.js THE GATE — one eth_call, never guesses
+  src/controllers/directoryController.js  signed directory writes: identities, facilities, requests + facility/patient reads
+  src/lib/facilityScope.js      the hospital read scope: currently linked patients, from the database
   src/lib/email.js              normalise + keyed HMAC + masked display; the address is never stored
   src/lib/codes.js              six-digit codes, grant tokens, hashes
   src/services/emailSender.js   mock (default) · resend · brevo; a refused send throws

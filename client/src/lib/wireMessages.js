@@ -31,6 +31,45 @@ export function dripMessage(address, timestamp) {
 }
 
 /**
+ * Must match server/src/controllers/directoryController.js `identityMessage`.
+ */
+export function identityMessage(account, label, facility, timestamp) {
+  const facilityPart =
+    facility && String(facility).trim() !== '' ? getAddress(facility) : '';
+  return (
+    'ApnaRecord register identity\n' +
+    `account: ${getAddress(account)}\n` +
+    `label: ${String(label || '').slice(0, 80)}\n` +
+    `facility: ${facilityPart}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+
+/**
+ * Must match server/src/controllers/directoryController.js `facilityMessage`.
+ */
+export function facilityMessage(it, name, timestamp) {
+  return (
+    'ApnaRecord register facility\n' +
+    `it: ${getAddress(it)}\n` +
+    `name: ${String(name || '').slice(0, 120)}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+
+/**
+ * Must match server/src/controllers/directoryController.js `requestMessage`.
+ */
+export function requestMessage(requestId, patient, recordType, timestamp) {
+  return (
+    'ApnaRecord record request\n' +
+    `requestId: ${Number(requestId)}\n` +
+    `patient: ${getAddress(patient)}\n` +
+    `recordType: ${String(recordType || '').slice(0, 60)}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+/**
  * Must match server/src/controllers/recordController.js `storeMessage`.
  *
  * `recordHash` is lowercased on both sides. ethers already returns lowercase hex from

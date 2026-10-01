@@ -28,6 +28,10 @@ const READS = new Interface([
   'function hasRole(bytes32,address) view returns (bool)',
   'function verifyRecord(uint256,bytes32) view returns (bool)',
   'function DEFAULT_ADMIN_ROLE() view returns (bytes32)',
+  'function MANAGER_ROLE() view returns (bytes32)',
+  'function HOSPITAL_ROLE() view returns (bytes32)',
+  'function facilities(address) view returns (bool)',
+  'function facilityPatient(address,address) view returns (bool)',
   'function canAccess(uint256,address) view returns (bool)',
   'function viewRecord(uint256) view returns (string)',
 ]);
@@ -145,6 +149,18 @@ function handle(message) {
       }
       if (which === selector('DEFAULT_ADMIN_ROLE')) {
         return READS.encodeFunctionResult('DEFAULT_ADMIN_ROLE', [id('DEFAULT_ADMIN_ROLE')]);
+      }
+      if (which === selector('MANAGER_ROLE')) {
+        return READS.encodeFunctionResult('MANAGER_ROLE', [id('MANAGER_ROLE')]);
+      }
+      if (which === selector('HOSPITAL_ROLE')) {
+        return READS.encodeFunctionResult('HOSPITAL_ROLE', [id('HOSPITAL_ROLE')]);
+      }
+      if (which === selector('facilities')) {
+        return READS.encodeFunctionResult('facilities', [process.env.MOCK_IS_FACILITY === 'true']);
+      }
+      if (which === selector('facilityPatient')) {
+        return READS.encodeFunctionResult('facilityPatient', [process.env.MOCK_LINKED === 'true']);
       }
       if (which === selector('canAccess')) {
         return READS.encodeFunctionResult('canAccess', [false]);

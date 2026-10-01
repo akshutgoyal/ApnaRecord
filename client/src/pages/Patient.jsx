@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'ethers';
 import { useChain } from '../chain';
 import { decryptRecord, fromBase64 } from '../crypto';
-import { chainEvents, releaseFile } from '../services/api';
+import { chainEvents, releaseFile, patientLinks } from '../services/api';
 import { useTx } from '../hooks/useTx';
 import { DEMO_ACCOUNTS } from '../config/demoAccounts';
 import AddressInput from '../components/AddressInput';
@@ -36,6 +36,7 @@ export default function Patient() {
   const [loadingGrants, setLoadingGrants] = useState(false);
   const [grant, setGrant] = useState({ viewer: '', duration: 3600 });
   const [viewing, setViewing] = useState(null);
+  const [links, setLinks] = useState({ linked: [], pending: [] });
 
   const tokenIds = useMemo(() => ownedRecords.map((r) => r.tokenId), [ownedRecords]);
   const activeGrants = grants.filter((entry) => entry.active);
@@ -71,14 +72,15 @@ export default function Patient() {
         for (const viewer of candidates) {
           if (viewer.toLowerCase() === account?.toLowerCase()) continue;
           try {
-            const [expiry] = await Promise.all([contract.consent(tokenId, viewer)]);
-            const expiryNumber = Number(expiry);
-            if (expiryNumber > 0) {
+            // The mapping is private: open-or-not is the only question left,
+            // and it is the one that matters here.
+            const [open] = await Promise.all([contract.canAccess(tokenId, viewer)]);
+            if (open) {
               rows.push({
                 tokenId,
                 viewer,
-                expiresAt: expiryNumber,
-                active: expiryNumber * 1000 > Date.now(),
+                expiresAt: null,
+                active: true,
                 label:
                   DEMO_ACCOUNTS.find((a) => a.address.toLowerCase() === viewer.toLowerCase())?.label ||
                   'Unlabelled wallet',
@@ -131,6 +133,35 @@ export default function Patient() {
       { successDetail: 'AccessRevoked recorded. The same read now returns AccessDenied.' }
     );
 
+  const loadLinks = useCallback(async () => {
+    if (!account) return;
+    try {
+      setLinks(await patientLinks(account));
+    } catch {
+      /* links need the database; grants do not */
+    }
+  }, [account]);
+
+  useEffect(() => {
+    loadLinks();
+  }, [loadLinks]);
+
+  const approveLink = (facility) =>
+    run(`Approve link`, async () => {
+      // Called BY the patient, which is the whole point: a hospital cannot
+      // link someone unilaterally and thereby read their history.
+      const tx = await writeAs('approvePatientLink', [facility]);
+      await tx.wait();
+      await loadLinks();
+    });
+
+  const revokeLink = (facility) =>
+    run(`Revoke link`, async () => {
+      const tx = await writeAs('revokePatientLink', [facility]);
+      await tx.wait();
+      await loadLinks();
+    });
+
   const openOwnRecord = (tokenId) =>
     run(`Open record #${tokenId}`, async () => {
       // Even the owner signs. The endpoint has no "but they own it" shortcut, and
@@ -173,6 +204,62 @@ export default function Patient() {
           </button>
         }
       />
+
+      <Card
+        className="mb-5"
+        title="Hospitals"
+        subtitle="Who may see your records' metadata. Content always needs a grant below — a link never opens a file."
+      >
+        {links.pending.length === 0 && links.linked.length === 0 ? (
+          <EmptyState
+            title="No hospital links"
+            hint="When a hospital asks to treat you, the request appears here for approval."
+          />
+        ) : (
+          <ul className="space-y-3">
+            {links.pending.map((entry) => (
+              <li
+                key={entry.facility}
+                className="flex flex-wrap items-center gap-3 rounded-lg border border-marigold-200 bg-marigold-50/50 p-3.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-ink">
+                    {entry.name || 'A hospital'} asks to link
+                  </p>
+                  <p className="mono mt-0.5 truncate text-[11px] text-slate-500">{entry.facility}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => approveLink(entry.facility)}
+                  disabled={isBusy('Approve link')}
+                  className="btn-primary"
+                >
+                  {isBusy('Approve link') ? <Busy label="Confirming…" /> : 'Approve'}
+                </button>
+              </li>
+            ))}
+            {links.linked.map((entry) => (
+              <li
+                key={entry.facility}
+                className="flex flex-wrap items-center gap-3 rounded-lg border border-line p-3.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-ink">{entry.name || 'Linked hospital'}</p>
+                  <p className="mono mt-0.5 truncate text-[11px] text-slate-500">{entry.facility}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => revokeLink(entry.facility)}
+                  disabled={isBusy('Revoke link')}
+                  className="btn-danger"
+                >
+                  {isBusy('Revoke link') ? <Busy label="Confirming…" /> : 'Revoke'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       {ownedRecords.length === 0 ? (
         <EmptyState

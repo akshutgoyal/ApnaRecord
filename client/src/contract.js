@@ -136,9 +136,9 @@ export const ROLES = {
   admin: {
     key: 'admin',
     label: 'Admin',
-    subtitle: 'Hospital IT',
+    subtitle: 'Platform',
     path: '/admin',
-    can: 'Register identities · mint records · revoke records · grant roles',
+    can: 'Create facilities · register identities · mint records · revoke records · grant roles',
     cannot: 'Read a patient file without consent',
   },
   doctor: {
@@ -148,6 +148,14 @@ export const ROLES = {
     path: '/doctor',
     can: 'Request records · read with consent · emergency break-glass (logged)',
     cannot: 'Mint records · keep access after a window closes',
+  },
+  hospital: {
+    key: 'hospital',
+    label: 'Hospital',
+    subtitle: 'Hospital IT',
+    path: '/hospital',
+    can: 'Link patients with consent · mint for linked patients · manage own staff',
+    cannot: 'Read a patient file · see patients from other hospitals',
   },
   auditor: {
     key: 'auditor',
@@ -167,4 +175,4 @@ export const ROLES = {
   },
 };
 
-export const ROLE_ORDER = ['admin', 'doctor', 'auditor', 'patient'];
+export const ROLE_ORDER = ['admin', 'hospital', 'doctor', 'auditor', 'patient'];

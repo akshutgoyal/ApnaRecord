@@ -1,0 +1,307 @@
+import { ethers } from 'ethers';
+import {
+  FacilityModel,
+  PatientLinkModel,
+  RequestModel,
+  IdentityModel,
+  isDbReady,
+} from '../models/index.js';
+import { call } from '../services/chain.js';
+
+// THE OFF-CHAIN DIRECTORY.
+//
+// The contract deliberately stopped carrying metadata: no labels, no record
+// types, no patient links, no request contents. That is what makes the chain
+// publishable — but it also means nobody can read a dashboard from the chain
+// alone any more. This controller is where that metadata lives, written only
+// under a wallet signature, because there is no session to authenticate with.
+//
+// Writes mirror an on-chain act that already happened (createIdentity,
+// createFacility, requestRecord). The server does not re-decide what the chain
+// decided; it records the part the chain refused to carry.
+
+const MAX_AGE_MS = 5 * 60 * 1000;
+
+/**
+ * Must stay byte-identical to `identityMessage` in `client/src/lib/wireMessages.js`.
+ * The two deploy separately so it is duplicated rather than imported, and the
+ * test suite asserts they agree.
+ */
+export function identityMessage(account, label, facility, timestamp) {
+  const facilityPart =
+    facility && String(facility).trim() !== '' ? ethers.getAddress(facility) : '';
+  return (
+    'ApnaRecord register identity\n' +
+    `account: ${ethers.getAddress(account)}\n` +
+    `label: ${String(label || '').slice(0, 80)}\n` +
+    `facility: ${facilityPart}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+
+/**
+ * Must stay byte-identical to `facilityMessage` in `client/src/lib/wireMessages.js`.
+ */
+export function facilityMessage(it, name, timestamp) {
+  return (
+    'ApnaRecord register facility\n' +
+    `it: ${ethers.getAddress(it)}\n` +
+    `name: ${String(name || '').slice(0, 120)}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+
+/**
+ * Must stay byte-identical to `requestMessage` in `client/src/lib/wireMessages.js`.
+ */
+export function requestMessage(requestId, patient, recordType, timestamp) {
+  return (
+    'ApnaRecord record request\n' +
+    `requestId: ${Number(requestId)}\n` +
+    `patient: ${ethers.getAddress(patient)}\n` +
+    `recordType: ${String(recordType || '').slice(0, 60)}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+
+function requireDb(res) {
+  if (!isDbReady()) {
+    res.status(503).json({
+      error: 'DatabaseUnavailable',
+      message:
+        'The directory is off-chain data, so it needs the database. ' +
+        'Everything authoritative — ownership, consent, verification — still works without it.',
+    });
+    return true;
+  }
+  return false;
+}
+
+async function isAdmin(address) {
+  const [role] = await call('DEFAULT_ADMIN_ROLE');
+  const [has] = await call('hasRole', [role, address]);
+  return Boolean(has);
+}
+
+async function isFacility(address) {
+  const [flag] = await call('facilities', [address]);
+  return Boolean(flag);
+}
+
+/**
+ * POST /api/identities
+ * Body: { account, label, facility, timestamp, signature }
+ *
+ * Records the label the chain refused to carry. The signer must be the platform
+ * admin (any placement) or a hospital IT wallet placing its own staff or its own
+ * patients — the same rule as `createIdentity` on-chain, re-checked here so a
+ * row cannot claim a placement the chain would refuse.
+ */
+export async function recordIdentity(req, res) {
+  if (requireDb(res)) return;
+  const { account, label, facility, timestamp, signature } = req.body || {};
+
+  if (!ethers.isAddress(account)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid account address.' });
+  }
+  const facilityAddr =
+    facility && String(facility).trim() !== '' ? String(facility).trim() : '';
+  if (facilityAddr && !ethers.isAddress(facilityAddr)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid facility address.' });
+  }
+  if (!timestamp || !signature) {
+    return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement is required.' });
+  }
+
+  const age = Date.now() - Number(timestamp);
+  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: 'The signature is stale. Refresh and try again.' });
+  }
+
+  let signer;
+  try {
+    signer = ethers.verifyMessage(identityMessage(account, label || '', facilityAddr, timestamp), signature);
+  } catch {
+    return res.status(403).json({ error: 'SignatureInvalid', message: 'That signature could not be read.' });
+  }
+
+  try {
+    const admin = await isAdmin(signer);
+    if (!admin) {
+      const facilityWallet = await isFacility(signer);
+      if (!facilityWallet) {
+        return res.status(403).json({ error: 'NotAuthorized', message: 'Only the platform or a hospital IT wallet may register identities.' });
+      }
+      if (facilityAddr && facilityAddr.toLowerCase() !== signer.toLowerCase()) {
+        return res.status(403).json({ error: 'NotAuthorized', message: 'A hospital may only place identities in its own facility.' });
+      }
+    }
+
+    const row = await IdentityModel.findOneAndUpdate(
+      { account: account.toLowerCase() },
+      {
+        account: account.toLowerCase(),
+        label: String(label || '').slice(0, 80),
+        facility: facilityAddr ? facilityAddr.toLowerCase() : '',
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return res.status(201).json({ ok: true, identity: row });
+  } catch (error) {
+    return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
+  }
+}
+
+/**
+ * POST /api/facilities
+ * Body: { it, name, timestamp, signature } — signed by the platform admin.
+ */
+export async function recordFacility(req, res) {
+  if (requireDb(res)) return;
+  const { it, name, timestamp, signature } = req.body || {};
+
+  if (!ethers.isAddress(it)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid facility address.' });
+  }
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: 'BadRequest', message: 'A facility name is required.' });
+  }
+  if (!timestamp || !signature) {
+    return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement is required.' });
+  }
+
+  let signer;
+  try {
+    signer = ethers.verifyMessage(facilityMessage(it, String(name).slice(0, 120), timestamp), signature);
+  } catch {
+    return res.status(403).json({ error: 'SignatureInvalid', message: 'That signature could not be read.' });
+  }
+  const age = Date.now() - Number(timestamp);
+  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: 'The signature is stale. Refresh and try again.' });
+  }
+
+  try {
+    if (!(await isAdmin(signer))) {
+      return res.status(403).json({ error: 'NotAuthorized', message: 'Only the platform may register facilities.' });
+    }
+    const row = await FacilityModel.findOneAndUpdate(
+      { it: it.toLowerCase() },
+      { it: it.toLowerCase(), name: String(name).slice(0, 120), active: true },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return res.status(201).json({ ok: true, facility: row });
+  } catch (error) {
+    return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
+  }
+}
+
+/**
+ * POST /api/requests
+ * Body: { requestId, patient, recordType, timestamp, signature } — signed by the
+ * requesting clinician. Anchors the contents of a `RecordRequested` event the
+ * chain carries only as an id.
+ */
+export async function recordRequest(req, res) {
+  if (requireDb(res)) return;
+  const { requestId, patient, recordType, timestamp, signature } = req.body || {};
+
+  if (!Number.isInteger(Number(requestId)) || Number(requestId) <= 0) {
+    return res.status(400).json({ error: 'BadRequest', message: 'requestId must be a positive integer.' });
+  }
+  if (!ethers.isAddress(patient)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid patient address.' });
+  }
+  if (!timestamp || !signature) {
+    return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement is required.' });
+  }
+
+  let signer;
+  try {
+    signer = ethers.verifyMessage(
+      requestMessage(Number(requestId), patient, String(recordType || ''), timestamp),
+      signature
+    );
+  } catch {
+    return res.status(403).json({ error: 'SignatureInvalid', message: 'That signature could not be read.' });
+  }
+  const age = Date.now() - Number(timestamp);
+  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: 'The signature is stale. Refresh and try again.' });
+  }
+
+  try {
+    const [managerRole] = await call('MANAGER_ROLE');
+    const [holds] = await call('hasRole', [managerRole, signer]);
+    if (!holds) {
+      return res.status(403).json({ error: 'NotAuthorized', message: 'Only a clinician holding MANAGER_ROLE may file requests.' });
+    }
+    const row = await RequestModel.findOneAndUpdate(
+      { requestId: Number(requestId) },
+      {
+        requestId: Number(requestId),
+        requester: signer.toLowerCase(),
+        patient: patient.toLowerCase(),
+        recordType: String(recordType || '').slice(0, 60),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return res.status(201).json({ ok: true, request: row });
+  } catch (error) {
+    return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
+  }
+}
+
+/** GET /api/facilities/:it — the facility, its linked patients, its records. */
+export async function facilityDetail(req, res) {
+  const { it } = req.params;
+  if (!ethers.isAddress(it)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid facility address.' });
+  }
+  try {
+    const [onChain] = await call('facilities', [it]).catch(() => [false]);
+    let directory = null;
+    let links = [];
+    if (isDbReady()) {
+      directory = await FacilityModel.findOne({ it: it.toLowerCase() }).lean();
+      links = await PatientLinkModel.find({ facility: it.toLowerCase(), state: 'linked' }).lean();
+    }
+    return res.json({
+      it: it.toLowerCase(),
+      registeredOnChain: Boolean(onChain),
+      name: directory?.name || null,
+      active: directory?.active ?? null,
+      linkedPatients: links.map((l) => ({ patient: l.patient, consentedAt: l.consentedAt })),
+    });
+  } catch (error) {
+    return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
+  }
+}
+
+/** GET /api/patients/:address/links — which facilities a patient is linked to, plus pending requests. */
+export async function patientLinks(req, res) {
+  const { address } = req.params;
+  if (!ethers.isAddress(address)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
+  }
+  try {
+    if (!isDbReady()) return res.json({ patient: address.toLowerCase(), linked: [], pending: [] });
+    const rows = await PatientLinkModel.find({ patient: address.toLowerCase() }).lean();
+    const names = new Map();
+    const facilities = await FacilityModel.find({
+      it: { $in: rows.map((r) => r.facility) },
+    }).lean();
+    for (const f of facilities) names.set(f.it, f.name);
+    return res.json({
+      patient: address.toLowerCase(),
+      linked: rows
+        .filter((r) => r.state === 'linked')
+        .map((r) => ({ facility: r.facility, name: names.get(r.facility) || null, consentedAt: r.consentedAt })),
+      pending: rows
+        .filter((r) => r.state === 'requested')
+        .map((r) => ({ facility: r.facility, name: names.get(r.facility) || null, requestedAt: r.requestedAt })),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'LinkReadFailed', message: error.message });
+  }
+}

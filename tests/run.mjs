@@ -241,10 +241,12 @@ const suiteEnv = { API_URL: API, API_URL_2: API_2, MOCK_LOG: chainLog, CHAIN };
 await runSuite('Contract — the account, executed on a real EVM', 'contract/account.test.mjs', {});
 await runSuite('Contract — ApnaRecord, executed on a real EVM', 'contract/apnarecord.test.mjs', {});
 await runSuite('Unit — email addresses, codes, relay adapters', 'unit/email.test.mjs', {});
+await runSuite('Unit — directory wire formats', 'unit/directory.test.mjs', {});
 await runSuite('Integration — email verification over HTTP', 'integration/contact.test.mjs', suiteEnv);
 await runSuite('Integration — wallet enrolment and funding', 'integration/wallet.test.mjs', suiteEnv);
 await runSuite('Integration — binding: one contact, one wallet', 'integration/binding.test.mjs', suiteEnv);
 await runSuite('Integration — hardening: signatures, limits, CORS', 'integration/hardening.test.mjs', suiteEnv);
+await runSuite('Integration — directory: signed metadata, scoped reads', 'integration/directory.test.mjs', suiteEnv);
 await runSuite('Integration — the dripper across two instances', 'integration/dripper.test.mjs', suiteEnv);
 
 killAll();

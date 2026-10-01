@@ -25,6 +25,13 @@ import {
 import { stats } from '../controllers/statsController.js';
 import { enrol, getWallet, lookupWallets, requestDrip, dripperHealth, rebind } from '../controllers/walletController.js';
 import { sendCode, checkCode } from '../controllers/identityController.js';
+import {
+  recordIdentity,
+  recordFacility,
+  recordRequest,
+  facilityDetail,
+  patientLinks,
+} from '../controllers/directoryController.js';
 import { requireConsent } from '../middleware/consentGate.js';
 
 const router = Router();
@@ -38,6 +45,16 @@ router.get('/health', getHealth);
 // code — which is what keeps an inbox being compromised from being a records breach.
 router.post('/identity/email/request', sendCode);
 router.post('/identity/email/verify', checkCode);
+
+// --- Directory: the metadata the chain refused to carry ---
+//
+// Labels, facility names and request contents are off-chain. Every write is
+// signed by a wallet the chain authorises for the matching on-chain act.
+router.post('/identities', recordIdentity);
+router.post('/facilities', recordFacility);
+router.post('/requests', recordRequest);
+router.get('/facilities/:it', facilityDetail);
+router.get('/patients/:address/links', patientLinks);
 
 // --- Wallet creation and funding ---
 //

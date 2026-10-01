@@ -14,6 +14,7 @@ import Admin from './pages/Admin';
 import Doctor from './pages/Doctor';
 import Patient from './pages/Patient';
 import Auditor from './pages/Auditor';
+import Hospital from './pages/Hospital';
 import Verify from './pages/Verify';
 import Profile from './pages/Profile';
 
@@ -21,6 +22,7 @@ import AdminDashboard from './pages/dashboards/AdminDashboard';
 import DoctorDashboard from './pages/dashboards/DoctorDashboard';
 import AuditorDashboard from './pages/dashboards/AuditorDashboard';
 import PatientDashboard from './pages/dashboards/PatientDashboard';
+import HospitalDashboard from './pages/dashboards/HospitalDashboard';
 
 /**
  * Home renders its own full-page design (hero, footer). /access is its own gate
@@ -90,6 +92,16 @@ function AppRoutes() {
           </RoleGate>
         }
       />
+      <Route
+        path="/hospital"
+        element={
+          <RoleGate role="hospital">
+            <AppShell>
+              <HospitalDashboard />
+            </AppShell>
+          </RoleGate>
+        }
+      />
 
       {/* Operational consoles — where the transactions actually happen. */}
       <Route
@@ -128,6 +140,16 @@ function AppRoutes() {
           <RoleGate role="patient">
             <AppShell>
               <Patient />
+            </AppShell>
+          </RoleGate>
+        }
+      />
+      <Route
+        path="/hospital/console"
+        element={
+          <RoleGate role="hospital">
+            <AppShell>
+              <Hospital />
             </AppShell>
           </RoleGate>
         }

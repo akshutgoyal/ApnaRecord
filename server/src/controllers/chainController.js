@@ -97,6 +97,47 @@ export async function chainEvents(req, res) {
     if (fromBlock !== null) matched = matched.filter((event) => event.blockNumber >= fromBlock);
     if (toBlock !== null) matched = matched.filter((event) => event.blockNumber <= toBlock);
 
+    const facility = (req.query.facility || '').trim();
+    if (facility) {
+      const { linkedPatientsOf } = await import('../lib/facilityScope.js');
+      const { RecordModel, RequestModel, isDbReady } = await import('../models/index.js');
+      let patients;
+      try {
+        patients = new Set((await linkedPatientsOf(facility)).map((p) => p.toLowerCase()));
+      } catch (error) {
+        return res
+          .status(error.status || 500)
+          .json({ error: error.error || 'ScopeFailed', message: error.message });
+      }
+      // Token and request anchors resolve to patients through the database —
+      // the events themselves no longer name them.
+      let tokenPatient = new Map();
+      let requestPatient = new Map();
+      if (isDbReady()) {
+        try {
+          const [recordRows, requestRows] = await Promise.all([
+            RecordModel.find().lean().catch(() => []),
+            RequestModel.find().lean().catch(() => []),
+          ]);
+          tokenPatient = new Map(recordRows.map((r) => [String(r.tokenId), String(r.patient || '').toLowerCase()]));
+          requestPatient = new Map(requestRows.map((r) => [String(r.requestId), String(r.patient || '').toLowerCase()]));
+        } catch {
+          /* unresolvable edges are dropped below */
+        }
+      }
+      const inScope = (address) => address && patients.has(String(address).toLowerCase());
+      matched = matched.filter((event) => {
+        const args = event.args || {};
+        if (args.tokenId !== undefined && inScope(tokenPatient.get(String(args.tokenId)))) return true;
+        if (args.requestId !== undefined && inScope(requestPatient.get(String(args.requestId)))) return true;
+        if (args.patient && inScope(args.patient)) return true;
+        if (args.facility && String(args.facility).toLowerCase() === facility.toLowerCase()) return true;
+        return Object.values(args).some(
+          (value) => typeof value === 'string' && inScope(value) && value.toLowerCase() !== facility.toLowerCase()
+        );
+      });
+    }
+
     const total = matched.length;
     const page = matched.slice(offset, offset + limit);
 
@@ -110,7 +151,14 @@ export async function chainEvents(req, res) {
       offset,
       limit,
       scanned: EVENT_SCAN_LIMIT,
-      filters: { name: name || null, actor: actor || null, search: search || null, fromBlock, toBlock },
+      filters: {
+        name: name || null,
+        actor: actor || null,
+        search: search || null,
+        fromBlock,
+        toBlock,
+        facility: facility ? facility.toLowerCase() : null,
+      },
     });
   } catch (error) {
     return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
@@ -148,15 +196,29 @@ export async function chainRecordHistory(req, res) {
     ];
 
     const all = await events(EVENT_SCAN_LIMIT);
+
+    // RecordRequested carries no tokenId and no patient — only (requestId,
+    // requester). The contents live in the database, so requests for THIS
+    // record's patient are resolved there and matched by requestId.
+    let requestIdsForPatient = null;
+    try {
+      const { RequestModel, isDbReady } = await import('../models/index.js');
+      if (isDbReady() && record.patient) {
+        const rows = await RequestModel.find({ patient: String(record.patient).toLowerCase() }).lean();
+        requestIdsForPatient = new Set(rows.map((r) => String(r.requestId)));
+      }
+    } catch {
+      /* anchors cannot be attributed without the database */
+    }
+
     const relevant = all.filter((event) => {
       if (!TOKEN_EVENTS.includes(event.name)) return false;
       const args = event.args || {};
       if (args.tokenId !== undefined) return String(args.tokenId) === String(tokenId);
-      // RecordRequested carries no tokenId — it is matched on the patient, which
-      // is the only handle it has.
-      return (
-        String(args.patient || '').toLowerCase() === String(record.patient || '').toLowerCase()
-      );
+      if (event.name === 'RecordRequested' && requestIdsForPatient) {
+        return requestIdsForPatient.has(String(args.requestId));
+      }
+      return false;
     });
 
     const [times, senders, labels] = await Promise.all([

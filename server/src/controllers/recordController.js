@@ -36,30 +36,56 @@ export function storeMessage(tokenId, patient, recordHash, timestamp) {
  * GET /api/records
  * The browse index. MongoDB when it is up; otherwise rebuilt from chain logs on
  * the spot — which is the whole point of calling the database a cache.
+ *
+ * ?facility=<it> scopes to the patients currently linked to that hospital.
+ * The link set itself needs the database; the records underneath resolve from
+ * whichever source serves them.
  */
 export async function listRecords(req, res) {
   try {
+    const facility = (req.query.facility || '').trim();
+    let scope = null;
+    if (facility) {
+      try {
+        const { linkedPatientsOf } = await import('../lib/facilityScope.js');
+        scope = new Set((await linkedPatientsOf(facility)).map((p) => p.toLowerCase()));
+      } catch (error) {
+        return res
+          .status(error.status || 500)
+          .json({ error: error.error || 'ScopeFailed', message: error.message });
+      }
+    }
+    const inScope = (patient) => !scope || (patient && scope.has(String(patient).toLowerCase()));
+
     if (isDbReady()) {
       const docs = await RecordModel.find().sort({ tokenId: 1 }).lean();
       if (docs.length > 0) {
         return res.json({
           source: 'database',
-          records: docs.map((d) => ({
-            tokenId: d.tokenId,
-            patient: d.patient,
-            recordType: d.recordType,
-            recordHash: d.recordHash,
-            cid: d.cid,
-            fileName: d.fileName,
-            mimeType: d.mimeType,
-            sizeBytes: d.sizeBytes,
-            locked: true,
-            burned: false,
-            mintedAtBlock: d.mintedAtBlock,
-            mintedTx: d.mintedTx,
-          })),
+          ...(scope ? { facility: facility.toLowerCase(), scoped: true } : {}),
+          records: docs
+            .filter((d) => inScope(d.patient))
+            .map((d) => ({
+              tokenId: d.tokenId,
+              patient: d.patient,
+              recordType: d.recordType,
+              recordHash: d.recordHash,
+              cid: d.cid,
+              fileName: d.fileName,
+              mimeType: d.mimeType,
+              sizeBytes: d.sizeBytes,
+              locked: true,
+              burned: false,
+              mintedAtBlock: d.mintedAtBlock,
+              mintedTx: d.mintedTx,
+            })),
         });
       }
+    }
+
+    if (scope) {
+      // No cached rows (or no database): the chain path below still resolves
+      // owners, so scoping applies there too rather than refusing.
     }
 
     const nextTokenId = Number((await call('nextTokenId'))[0]);
@@ -67,6 +93,7 @@ export async function listRecords(req, res) {
     for (let tokenId = 1; tokenId < nextTokenId; tokenId++) {
       const meta = await recordMeta(tokenId);
       if (!meta) continue;
+      if (!inScope(meta.patient)) continue;
       records.push({
         tokenId: meta.tokenId,
         patient: meta.patient,
@@ -81,6 +108,7 @@ export async function listRecords(req, res) {
     return res.json({
       source: 'chain',
       note: 'Rebuilt from RecordMinted logs. Start MongoDB to use the fast index.',
+      ...(scope ? { facility: facility.toLowerCase(), scoped: true } : {}),
       records,
     });
   } catch (error) {
@@ -205,6 +233,10 @@ export async function storeRecord(req, res) {
 
     const statement = storeMessage(Number(tokenId), patient, digest, timestamp);
 
+    // The facility that staged these bytes, for the hospital read scope.
+    // The platform mints anywhere and stamps nothing.
+    let minterFacility = '';
+
     if (onChainOwner) {
       const problem = verifyStatement({
         message: statement,
@@ -249,12 +281,29 @@ export async function storeRecord(req, res) {
       const [adminRole] = await call('DEFAULT_ADMIN_ROLE');
       const [isAdmin] = await call('hasRole', [adminRole, recovered.signer]);
       if (!isAdmin) {
-        return res.status(403).json({
-          error: 'NotMintingRole',
-          message:
-            'This token has not been minted yet, so the uploader must be the account that can mint ' +
-            'it. That signature is not from an account holding DEFAULT_ADMIN_ROLE on-chain.',
-        });
+        // A hospital may stage bytes for a patient it is currently linked to —
+        // the same gate as `mintRecord` on-chain, re-checked here so a row
+        // cannot be parked for a mint the chain would refuse.
+        const [hospitalRole] = await call('HOSPITAL_ROLE');
+        const [isHospital] = await call('hasRole', [hospitalRole, recovered.signer]);
+        let linked = false;
+        if (isHospital) {
+          try {
+            const [flag] = await call('facilityPatient', [recovered.signer, patient]);
+            linked = Boolean(flag);
+          } catch {
+            linked = false;
+          }
+        }
+        if (!linked) {
+          return res.status(403).json({
+            error: 'NotMintingRole',
+            message:
+              'This token has not been minted yet, so the uploader must be an account that can mint ' +
+              'it — the platform, or a hospital currently linked to this patient.',
+          });
+        }
+        minterFacility = recovered.signer.toLowerCase();
       }
     }
 
@@ -274,6 +323,7 @@ export async function storeRecord(req, res) {
           fileName: fileName || 'record.bin',
           mimeType: mimeType || 'application/octet-stream',
           sizeBytes: payload.length,
+          facility: minterFacility || '',
         },
         { upsert: true, new: true }
       );

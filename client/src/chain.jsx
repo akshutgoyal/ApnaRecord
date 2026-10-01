@@ -177,8 +177,8 @@ export function ChainProvider({ children }) {
   const [account, setAccount] = useState(null);
   const [availableAccounts, setAvailableAccounts] = useState([]);
   const [chainId, setChainId] = useState(null);
-  const [roles, setRoles] = useState({ admin: false, manager: false, auditor: false });
-  const [identity, setIdentity] = useState({ label: '', active: false });
+  const [roles, setRoles] = useState({ admin: false, manager: false, auditor: false, hospital: false });
+  const [identity, setIdentity] = useState({ label: '', active: false, facility: null });
   const [did, setDid] = useState('');
   const [ownedRecords, setOwnedRecords] = useState([]);
   const [connecting, setConnecting] = useState(false);
@@ -381,8 +381,8 @@ export function ChainProvider({ children }) {
     async (address) => {
       const target = address || accountRef.current;
       if (!target) {
-        setRoles({ admin: false, manager: false, auditor: false });
-        setIdentity({ label: '', active: false });
+        setRoles({ admin: false, manager: false, auditor: false, hospital: false });
+        setIdentity({ label: '', active: false, facility: null });
         setDid('');
         setOwnedRecords([]);
         return;
@@ -401,8 +401,13 @@ export function ChainProvider({ children }) {
             admin: info.roles.admin,
             manager: info.roles.manager,
             auditor: info.roles.auditor,
+            hospital: Boolean(info.isFacility),
           });
-          setIdentity({ label: info.identity.label, active: info.identity.active });
+          setIdentity({
+            label: info.identity.label || '',
+            active: info.identity.active,
+            facility: info.identity.facility && info.identity.facility !== '0x0000000000000000000000000000000000000000' ? info.identity.facility : (info.isFacility ? target : null),
+          });
           setDid(info.did || '');
         } else if (provider) {
           const network = await provider.getNetwork();
@@ -412,20 +417,45 @@ export function ChainProvider({ children }) {
           // Roles: one authoritative source, the contract.
           const contract = await readContract();
           if (contract) {
-            const [adminRole, managerRole, auditorRole] = await Promise.all([
+            const [adminRole, managerRole, auditorRole, hospitalRole] = await Promise.all([
               contract.DEFAULT_ADMIN_ROLE(),
               contract.MANAGER_ROLE(),
               contract.AUDITOR_ROLE(),
+              contract.HOSPITAL_ROLE(),
             ]);
-            const [isAdmin, isManager, isAuditor, record, didString] = await Promise.all([
-              contract.hasRole(adminRole, target),
-              contract.hasRole(managerRole, target),
-              contract.hasRole(auditorRole, target),
-              contract.identities(target),
-              contract.didFor(target),
-            ]);
-            setRoles({ admin: isAdmin, manager: isManager, auditor: isAuditor });
-            setIdentity({ label: record[0], active: record[2] });
+            const [isAdmin, isManager, isAuditor, isHospital, record, didString, facilityFlag] =
+              await Promise.all([
+                contract.hasRole(adminRole, target),
+                contract.hasRole(managerRole, target),
+                contract.hasRole(auditorRole, target),
+                contract.hasRole(hospitalRole, target),
+                contract.identities(target),
+                contract.didFor(target),
+                contract.facilities(target).catch(() => false),
+              ]);
+            // Labels are off-chain now: the struct is (createdAt, active,
+            // facility), so index 0 is a timestamp, not a name. The label comes
+            // from the directory (POST /identities), read back joined.
+            let label = '';
+            try {
+              const { chainIdentities } = await import('./services/api');
+              const list = await chainIdentities().catch(() => null);
+              label =
+                list?.identities?.find(
+                  (entry) => String(entry.account).toLowerCase() === String(target).toLowerCase()
+                )?.label || '';
+            } catch {
+              /* label is a nicety */
+            }
+            const facilityAddr = record[2];
+            const zero = '0x0000000000000000000000000000000000000000';
+            setRoles({ admin: isAdmin, manager: isManager, auditor: isAuditor, hospital: isHospital });
+            setIdentity({
+              label,
+              active: record[1],
+              facility:
+                facilityAddr && facilityAddr !== zero ? facilityAddr : facilityFlag ? target : null,
+            });
             setDid(didString);
           }
         } else {
@@ -649,8 +679,8 @@ export function ChainProvider({ children }) {
     setLockedAddress(null);
     accountRef.current = null;
     setAccount(null);
-    setRoles({ admin: false, manager: false, auditor: false });
-    setIdentity({ label: '', active: false });
+    setRoles({ admin: false, manager: false, auditor: false, hospital: false });
+    setIdentity({ label: '', active: false, facility: null });
     setDid('');
     setOwnedRecords([]);
   }, []);
@@ -685,10 +715,11 @@ export function ChainProvider({ children }) {
   }, [demoRole, refresh, syncAccounts]);
 
   const isPatient = ownedRecords.length > 0;
-  const anyRole = roles.admin || roles.manager || roles.auditor || isPatient;
+  const anyRole = roles.admin || roles.manager || roles.auditor || roles.hospital || isPatient;
 
   const primaryRole = useMemo(() => {
     if (roles.admin) return 'admin';
+    if (roles.hospital) return 'hospital';
     if (roles.manager) return 'doctor';
     if (roles.auditor) return 'auditor';
     if (isPatient) return 'patient';
@@ -738,8 +769,8 @@ export function ChainProvider({ children }) {
         demoRoleRef.current = null;
         accountRef.current = null;
         setAccount(null);
-        setRoles({ admin: false, manager: false, auditor: false });
-        setIdentity({ label: '', active: false });
+        setRoles({ admin: false, manager: false, auditor: false, hospital: false });
+        setIdentity({ label: '', active: false, facility: null });
         setDid('');
         setOwnedRecords([]);
         setWalletError(null);

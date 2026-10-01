@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'ethers';
 import { useChain } from '../chain';
 import { decryptRecord, fromBase64, formatBytes } from '../crypto';
-import { listRecords, releaseFile } from '../services/api';
+import { listRecords, releaseFile, recordRequest } from '../services/api';
+import { requestMessage } from '../lib/wireMessages';
 import { useTx } from '../hooks/useTx';
 import AddressInput from '../components/AddressInput';
 import ConsentTimer from '../components/ConsentTimer';
@@ -21,14 +22,14 @@ import {
 const RECORD_TYPES = ['MRI_SCAN', 'BLOOD_PANEL', 'XRAY', 'DISCHARGE_SUMMARY'];
 
 export default function Doctor() {
-  const { account, roles, readContract, writeAs, signRead, refresh } = useChain();
+  const { account, roles, readContract, writeAs, signRead, signMessage, refresh } = useChain();
   const { run, isBusy } = useTx({ onDone: useCallback(() => refresh(), [refresh]) });
 
   const [records, setRecords] = useState([]);
   const [accessMap, setAccessMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [request, setRequest] = useState({ patient: '', recordType: 'MRI_SCAN' });
-  const [breakGlass, setBreakGlass] = useState({ tokenId: '', reason: '' });
+  const [breakGlass, setBreakGlass] = useState({ tokenId: '' });
   const [viewing, setViewing] = useState(null);
 
   const isManager = roles.manager;
@@ -78,8 +79,39 @@ export default function Doctor() {
       'requestRecord',
       async () => {
         if (!isAddress(request.patient)) throw new Error('A valid patient address is required.');
-        const tx = await writeAs('requestRecord', [request.patient, request.recordType]);
-        await tx.wait();
+        // The chain anchors only (requestId, requester). The patient and the
+        // record type travel signed to the server, which is the only place
+        // they are stored — see POST /requests.
+        const tx = await writeAs('requestRecord', []);
+        const receipt = await tx.wait();
+        const reader = await readContract();
+        let requestId = null;
+        for (const log of receipt.logs || []) {
+          try {
+            const parsed = reader.interface.parseLog(log);
+            if (parsed?.name === 'RecordRequested') {
+              requestId = Number(parsed.args.requestId);
+              break;
+            }
+          } catch {
+            /* not our event */
+          }
+        }
+        if (!Number.isInteger(requestId) || requestId <= 0) {
+          throw new Error('The request landed but its id could not be read. Find it in the event log and file the contents from there.');
+        }
+        const timestamp = Date.now();
+        const signature = await signMessage(
+          requestMessage(requestId, request.patient, request.recordType, timestamp)
+        );
+        await recordRequest({
+          requestId,
+          patient: request.patient,
+          recordType: request.recordType,
+          timestamp,
+          signature,
+        });
+        setRequest({ patient: '', recordType: 'MRI_SCAN' });
       },
       {
         successDetail: 'RecordRequested recorded. The lab requests — the admin decides whether to mint.',
@@ -92,15 +124,17 @@ export default function Doctor() {
       async () => {
         const tokenId = Number(breakGlass.tokenId);
         if (!Number.isInteger(tokenId) || tokenId <= 0) throw new Error('Enter a token ID.');
-        if (!breakGlass.reason.trim()) throw new Error('Break-glass requires a stated reason.');
-        const tx = await writeAs('emergencyAccess', [tokenId, account, breakGlass.reason.trim()]);
+        // The justification is NOT on-chain any more: it was free text on a
+        // permanent public log. The event records viewer and expiry; the reason
+        // is stated to the patient out of band.
+        const tx = await writeAs('emergencyAccess', [tokenId, account]);
         await tx.wait();
-        setBreakGlass({ tokenId: '', reason: '' });
+        setBreakGlass({ tokenId: '' });
         await load();
       },
       {
         successDetail:
-          'One hour, one record, and the reason is permanently on-chain. Consent was bypassed by design.',
+          'One hour, one record, and the access is permanently on-chain. Consent was bypassed by design.',
       }
     );
 
@@ -118,14 +152,8 @@ export default function Doctor() {
         plaintext = null;
       }
       setViewing({ ...released, plaintext, byteLength: fromBase64(released.ciphertext).length });
-      // Read the expiry from the contract so the countdown reflects real state.
-      const contract = await readContract();
-      if (contract) {
-        const expiry = await contract.consent(tokenId, account);
-        setViewing((current) =>
-          current ? { ...current, expiresAt: Number(expiry) || undefined } : current
-        );
-      }
+      // No expiry re-read: the consent mapping is private, so `canAccess` can
+      // only answer open-or-not — and the release succeeding already answered it.
       await load();
     });
 
@@ -220,16 +248,6 @@ export default function Doctor() {
                 inputMode="numeric"
               />
             </Field>
-            <Field label="Reason" hint="Stored on-chain forever. Write something you would defend.">
-              <input
-                className="input"
-                value={breakGlass.reason}
-                onChange={(event) =>
-                  setBreakGlass((current) => ({ ...current, reason: event.target.value }))
-                }
-                placeholder="e.g., patient unconscious in A&E"
-              />
-            </Field>
             <button
               type="button"
               onClick={emergencyAccess}
@@ -240,8 +258,9 @@ export default function Doctor() {
             </button>
             <p className="text-[11px] leading-relaxed text-slate-600">
               This is the honest exception to patient control. It is capped at one hour and the
-              EmergencyAccessUsed event names the clinician and the reason, so it is auditable even
-              though it is not based on consent.
+              EmergencyAccessUsed event names the record and the clinician, so it is auditable even
+              though it is not based on consent. No reason text goes on-chain — state it to the
+              patient out of band.
             </p>
           </div>
         </Card>

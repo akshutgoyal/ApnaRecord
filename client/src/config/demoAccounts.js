@@ -18,10 +18,11 @@
 //
 // Target contract: 0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
 //
-// Hospital 101 is NOT in the list below, deliberately — the app has no hospital role yet
+// Hospital 101 is the first facility. Its IT wallet IS the facility on-chain.
 // (that is Phase D, with the facility console). The address is recorded here so it is not
 // lost: 0xc089766ad7B4E2835f1955D7f7122242CdDA978C. It has been funded, and on-chain it
 // is the facility — the key that `createFacility` names and `HOSPITAL_ROLE` is granted to.
+// Its name lives in the database (POST /facilities), because names are off-chain now.
 
 export const DEMO_ACCOUNTS = [
   {
@@ -30,6 +31,13 @@ export const DEMO_ACCOUNTS = [
     label: 'Platform',
     address: '0x436625C20e1f90133c52B6C1728709B295fd82B6',
     note: 'Deployed the current contract. Holds DEFAULT_ADMIN_ROLE — the only wallet that can mint, grant roles and create facilities.',
+  },
+  {
+    key: 'hospital',
+    role: 'hospital',
+    label: 'Hospital 101',
+    address: '0xc089766ad7B4E2835f1955D7f7122242CdDA978C',
+    note: 'Holds HOSPITAL_ROLE. Links patients with their consent, mints for linked patients, manages own staff.',
   },
   {
     key: 'doctor',

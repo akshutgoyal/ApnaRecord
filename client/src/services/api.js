@@ -89,6 +89,7 @@ export const chainEvents = ({
   search,
   fromBlock,
   toBlock,
+  facility,
 } = {}) => {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (name) params.set('name', name);
@@ -96,6 +97,7 @@ export const chainEvents = ({
   if (search) params.set('search', search);
   if (fromBlock) params.set('fromBlock', String(fromBlock));
   if (toBlock) params.set('toBlock', String(toBlock));
+  if (facility) params.set('facility', String(facility));
   return request(`/chain/events?${params.toString()}`);
 };
 
@@ -104,7 +106,8 @@ export const recordHistory = (tokenId) => request(`/chain/records/${tokenId}/his
 
 // -------------------------------------------------------------- record index
 
-export const listRecords = () => request('/records');
+export const listRecords = ({ facility } = {}) =>
+  request(facility ? `/records?facility=${facility}` : '/records');
 export const getRecord = (tokenId) => request(`/records/${tokenId}`);
 export const recordsByOwner = (address) => request(`/records/owner/${address}`);
 
@@ -130,7 +133,32 @@ export const releaseFile = (tokenId, viewer, proof = {}) =>
  * `fresh` bypasses the server's 60-second cache when someone presses refresh —
  * a refresh should mean "read the chain again", not "re-read the cache".
  */
-export const getStats = ({ fresh = false } = {}) => request(`/stats${fresh ? '?fresh=1' : ''}`);
+export const getStats = ({ fresh = false, facility } = {}) => {
+  const params = new URLSearchParams();
+  if (fresh) params.set('fresh', '1');
+  if (facility) params.set('facility', String(facility));
+  const query = params.toString();
+  return request(`/stats${query ? `?${query}` : ''}`);
+};
+
+// ------------------------------------------------- directory (off-chain metadata)
+//
+// Labels, facility names and request contents live in the database, because the
+// chain refused to carry them. Every write is signed by a wallet the chain
+// authorises for the matching on-chain act.
+
+export const recordIdentity = (body) =>
+  request('/identities', { method: 'POST', body: JSON.stringify(body) });
+
+export const recordFacility = (body) =>
+  request('/facilities', { method: 'POST', body: JSON.stringify(body) });
+
+export const recordRequest = (body) =>
+  request('/requests', { method: 'POST', body: JSON.stringify(body) });
+
+export const facilityDetail = (it) => request(`/facilities/${it}`);
+
+export const patientLinks = (address) => request(`/patients/${address}/links`);
 
 // ------------------------------------------------- patient-owned profiles
 // Off-chain display data. The chain records that a wallet is a label and owns

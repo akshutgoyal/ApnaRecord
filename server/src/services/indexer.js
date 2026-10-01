@@ -13,7 +13,7 @@
 // own connection and close it, because the API already has one and the CLI does not.
 
 import { identities, events, recordMeta, call } from './chain.js';
-import { IdentityModel, ChainEventModel, RecordModel } from '../models/index.js';
+import { IdentityModel, ChainEventModel, RecordModel, PatientLinkModel } from '../models/index.js';
 
 /**
  * One pass. Returns what it mirrored.
@@ -25,14 +25,20 @@ export async function runIndexer({ log = () => {} } = {}) {
   // ---- identities ---------------------------------------------------------
   const chainIdentities = await identities();
   for (const identity of chainIdentities) {
+    // Labels are NEVER mirrored from the chain — the chain does not have them.
+    // They arrive via POST /identities, so overwriting them here would wipe
+    // every name on each pass. Only state and roles are mirrored.
     await IdentityModel.findOneAndUpdate(
       { account: identity.account.toLowerCase() },
       {
-        account: identity.account.toLowerCase(),
-        label: identity.label,
-        active: identity.active,
-        registeredAtBlock: identity.registeredAtBlock,
-        roles: identity.roles,
+        $set: {
+          account: identity.account.toLowerCase(),
+          facility: String(identity.facility || '').toLowerCase(),
+          active: identity.active,
+          registeredAtBlock: identity.registeredAtBlock,
+          roles: identity.roles,
+        },
+        $setOnInsert: { label: '' },
       },
       { upsert: true }
     );
@@ -84,10 +90,43 @@ export async function runIndexer({ log = () => {} } = {}) {
   }
   log(`  events       ${eventCount} mirrored`);
 
+  // ---- patient links ------------------------------------------------------
+  // Linked/requested/ended states mirror the link events. The server is the only
+  // place the CURRENT state is cheap to ask — the chain holds the edges as
+  // booleans, and this folds them into one row per pair.
+  let linkCount = 0;
+  for (const event of chainEvents) {
+    const args = event.args || {};
+    if (event.name === 'PatientLinkRequested' && args.facility && args.patient) {
+      await PatientLinkModel.findOneAndUpdate(
+        { facility: String(args.facility).toLowerCase(), patient: String(args.patient).toLowerCase() },
+        { $set: { state: 'requested', requestedAt: new Date() }, $setOnInsert: { consentedAt: null, endedAt: null } },
+        { upsert: true }
+      );
+      linkCount++;
+    } else if (event.name === 'PatientLinked' && args.facility && args.patient) {
+      await PatientLinkModel.findOneAndUpdate(
+        { facility: String(args.facility).toLowerCase(), patient: String(args.patient).toLowerCase() },
+        { $set: { state: 'linked', consentedAt: new Date() } },
+        { upsert: true }
+      );
+      linkCount++;
+    } else if (event.name === 'PatientUnlinked' && args.facility && args.patient) {
+      await PatientLinkModel.findOneAndUpdate(
+        { facility: String(args.facility).toLowerCase(), patient: String(args.patient).toLowerCase() },
+        { $set: { state: 'ended', endedAt: new Date() } },
+        { upsert: true }
+      );
+      linkCount++;
+    }
+  }
+  log(`  links        ${linkCount} mirrored`);
+
   return {
     identities: chainIdentities.length,
     records: recordCount,
     events: eventCount,
+    links: linkCount,
     at: new Date().toISOString(),
   };
 }
