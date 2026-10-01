@@ -501,6 +501,19 @@ export function ChainProvider({ children }) {
   const syncAccounts = useCallback(
     async ({ prompt = false } = {}) => {
       if (!hasWallet()) return;
+      // A demo persona is not a wallet account, so the extension's account list has
+      // nothing to say about it and must not be allowed to overwrite it.
+      //
+      // This was a real bug: `enterDemo` set the address and kicked off `refresh`,
+      // then the mount effect's `syncAccounts` landed a moment later and replaced it
+      // with `eth_accounts[0]` — which on a machine with MetaMask holding four
+      // accounts is an address the demo was never showing. The user picked "Demo
+      // admin" and got "this wallet holds no role" for an address they did not choose.
+      // The API answered `admin: true` the whole time.
+      //
+      // The poll timer below fires every 12s, so this was not a one-off race either:
+      // any refresh could re-clobber the demo and bounce them out of the console.
+      if (demoRoleRef.current) return;
       try {
         setConnecting(true);
         setWalletError(null);
@@ -746,6 +759,8 @@ export function ChainProvider({ children }) {
       isDemo: Boolean(demoRole),
       demoAddress: demoRole ? demoAddressFor(demoRole) : null,
       enterDemo: async (role) => {
+        // Set the ref BEFORE any await. `refresh` reads it to decide which read path
+        // to take, and the extension's account list must not overwrite what follows.
         try {
           sessionStorage.setItem(DEMO_KEY, role);
         } catch {
@@ -757,7 +772,14 @@ export function ChainProvider({ children }) {
         accountRef.current = address;
         setAccount(address);
         setChainId(CHAIN_ID);
-        await refresh(address);
+        // Roles come back empty until this resolves, so the page must not conclude
+        // "no role" in the meantime. `bootstrapped` is what the gate waits on.
+        setBootstrapped(false);
+        try {
+          await refresh(address);
+        } finally {
+          setBootstrapped(true);
+        }
       },
       exitDemo: () => {
         try {
