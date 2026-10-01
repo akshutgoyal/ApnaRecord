@@ -1,8 +1,11 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 
-// Toasts clear themselves. Success sits for 3s; anything that is part of the
-// argument — a refusal, a revert — stays longer, because the refusal is often
-// the point being demonstrated.
+// Toasts clear themselves after 5s, whatever the tone.
+//
+// Per-tone timings were tried — 3s for success, longer for refusals — and then a period
+// where chain/error/warn never expired at all. A single 5s default is easier to reason
+// about and never leaves anything stuck on screen. A caller that needs otherwise passes
+// an explicit `ttl`.
 
 const ToastContext = createContext(null);
 
@@ -12,8 +15,8 @@ const TONE = {
   info: { wrap: 'border-line', bar: 'bg-peacock-600', title: 'text-ink', icon: '◈' },
   warn: { wrap: 'border-warn-200', bar: 'bg-warn-500', title: 'text-warn-700', icon: '!' },
   accent: { wrap: 'border-marigold-200', bar: 'bg-marigold-400', title: 'text-marigold-700', icon: '◔' },
-  // A settled on-chain outcome. Distinct from `ok` because it stays on screen until
-  // dismissed, and because it is the one the user is meant to keep.
+  // A settled on-chain outcome. Distinct from `ok` only by its tint now — it used to be
+  // the tone that never expired; it is 5s like the rest.
   chain: { wrap: 'border-peacock-300', bar: 'bg-peacock-600', title: 'text-peacock-700', icon: '◈' },
 };
 
@@ -28,21 +31,19 @@ export function ToastProvider({ children }) {
     (toast) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const tone = toast.tone || 'info';
-      // A write outcome does not expire on a timer.
+      // Every toast clears itself after 5s.
       //
-      // It used to: 3s for success. The audit of the eight largest US EHR patient
-      // portals found the worst failure mode there was silent failure — a failed
-      // upload that "routinely results in the practice never receiving the document
-      // at all, because the silent failure mode produces no error and no record." For
-      // this product it is worse: the on-chain anchor is the only proof the record
-      // exists, so a user who looks away from a 3-second toast has no way to learn
-      // the mint succeeded. `ttl: Infinity` keeps it up until it is dismissed, which
-      // is also what a screen reader needs — a polite live region that empties itself
-      // is announced and then gone.
+      // This used to be split: 3s for success, 9s for the rest, and an earlier change
+      // made chain/error/warn permanent so a write outcome could not be missed. That is
+      // reversed deliberately — a toast that stays until dismissed accumulates, and one
+      // that never leaves is a permanent obstruction on a small screen.
       //
-      // Non-blocking toasts (someone tapping through a demo) can still ask for a
-      // timer by passing an explicit `ttl`, so this is a default rather than a ban.
-      const ttl = toast.ttl ?? (tone === 'chain' || tone === 'error' || tone === 'warn' ? Infinity : 9000);
+      // The cost is real and worth naming: the chain toast is where the transaction hash
+      // appears, and that hash is the user's only proof the mint happened. Looking away
+      // for five seconds loses it. The escape hatch is `ttl` — a caller that needs a
+      // longer or permanent toast passes one explicitly, so permanence is a decision at
+      // the call site rather than a property of the category.
+      const ttl = toast.ttl ?? 5000;
       setToasts((current) => [...current.slice(-3), { id, tone, ...toast }]);
       if (Number.isFinite(ttl)) {
         setTimeout(() => dismiss(id), ttl);
