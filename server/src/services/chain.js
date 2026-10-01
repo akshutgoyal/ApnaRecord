@@ -121,13 +121,19 @@ export function decodeRevert(error) {
 
 // ---------------------------------------------------------------- reads
 
-// Public RPC providers cap eth_getLogs to a block range (50k on the default
-// endpoint), so logs are scanned in chunks. Two things keep this cheap:
-//   1. the scan starts at the block the contract was deployed in, not block 0;
-//   2. the whole log set is fetched once and cached briefly, then filtered in
-//      memory. Callers like recordMeta ask per-token, and refetching the chain
-//      for every token would be absurd when the total is a handful of events.
-const CHUNK = 45_000;
+// Public RPC providers cap eth_getLogs to a block range, and the cap is a property of
+// whichever provider RPC_URL happens to point at — it was ~45k against the L1 endpoint
+// this used to use, and it is 1,000 against `sepolia.base.org`. Exceeding it is not a
+// slow path: the request is rejected outright (413, "eth_getLogs is limited to a 1,000
+// range"), so every scan failed and both the stats cache and the indexer stopped working
+// while the API went on answering from stale data. Hence overridable.
+//
+// Two things keep the scan cheap:
+//   1. it starts at the block the contract was deployed in, not block 0;
+//   2. the whole log set is fetched once and cached briefly, then filtered in memory.
+//      Callers like recordMeta ask per-token, and refetching the chain for every token
+//      would be absurd when the total is a handful of events.
+const CHUNK = Number(process.env.LOGS_CHUNK_BLOCKS) || 999;
 const LOG_TTL_MS = 20_000;
 
 let deployBlockCache = null;
