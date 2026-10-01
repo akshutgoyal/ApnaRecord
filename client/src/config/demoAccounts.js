@@ -16,7 +16,8 @@
 //     label lives in the database. So a label here and a label in the database can
 //     disagree, and the database is the one the UI shows.
 //
-// Target contract: 0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
+// Target contract (Base Sepolia, chainId 84532):
+// 0x5c50627E420ae7AFd8c4FCC522814a4A5f10dCAA
 //
 // Hospital 101 is the first facility. Its IT wallet IS the facility on-chain.
 // (that is Phase D, with the facility console). The address is recorded here so it is not
