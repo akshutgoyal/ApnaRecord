@@ -482,7 +482,7 @@ export default function Admin() {
         </Card>
 
         <Card
-          title="4 · Revoke, and try to break soulbound"
+          title="5 · Revoke, and try to break soulbound"
           subtitle="Both are useful to watch. One is irreversible, the other just proves a point."
         >
           <div className="space-y-3">
