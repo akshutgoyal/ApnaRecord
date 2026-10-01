@@ -1,12 +1,22 @@
-// The wallets already registered on the deployed contract, recovered from its
-// IdentityCreated logs and confirmed against hasRole.
+// The wallets used in the demo walkthrough.
 //
 // These are CONVENIENCE ONLY. The app never decides a role from this file — it
 // asks the contract (see useChain). This list exists so that address fields can
 // offer a one-click fill instead of asking anyone to paste 42 hex characters,
 // and so the home page can show what the demo accounts are.
 //
-// Verified on-chain at contract 0x464e6963cE0D833193C83Fc8Bd081614B9344b03.
+// Two things changed with the privacy rewrite, and both matter here:
+//
+//   * These addresses hold NOTHING on the current contract. It is freshly
+//     deployed, so `nextTokenId` and `nextRequestId` are both 1 and no role has
+//     been granted. This list is the intended cast, not a record of what is
+//     registered — re-register them through the Admin console.
+//   * The LABELS below are no longer recoverable from the chain. `IdentityCreated`
+//     used to carry one; it now carries only the account and its facility, and the
+//     label lives in the database. So a label here and a label in the database can
+//     disagree, and the database is the one the UI shows.
+//
+// Target contract: 0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
 
 export const DEMO_ACCOUNTS = [
   {

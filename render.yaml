@@ -16,7 +16,7 @@ services:
       - key: SEPOLIA_RPC_URL
         value: https://ethereum-sepolia-rpc.publicnode.com
       - key: CONTRACT_ADDRESS
-        value: 0x464e6963cE0D833193C83Fc8Bd081614B9344b03
+        value: 0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
       - key: CONTRACT_DEPLOY_BLOCK
         value: 11714309
       # Uploads are wiped on every redeploy without a persistent disk. Mount one

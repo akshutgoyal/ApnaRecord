@@ -119,7 +119,7 @@ export const ACCOUNT_ABI = [
 // test suite load the real read-proof domain instead of re-declaring it and
 // proving only that two copies of the same constant match.
 export const CONTRACT_ADDRESS =
-  import.meta.env?.VITE_CONTRACT_ADDRESS || '0x464e6963cE0D833193C83Fc8Bd081614B9344b03';
+  import.meta.env?.VITE_CONTRACT_ADDRESS || '0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA';
 
 export const CHAIN_ID = Number(import.meta.env?.VITE_CHAIN_ID || 11155111);
 

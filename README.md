@@ -6,7 +6,7 @@ Patient-owned medical records, verifiable by anyone, instantly.
 
 **Login is a wallet. A record is a soulbound token. Permission is a smart contract.**
 
-Live contract (Sepolia): [`0x464e6963cE0D833193C83Fc8Bd081614B9344b03`](https://sepolia.etherscan.io/address/0x464e6963cE0D833193C83Fc8Bd081614B9344b03) · deploy block `11714309`
+Live contract (Sepolia): [`0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA`](https://sepolia.etherscan.io/address/0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA) · deploy block `11820529`
 
 ---
 
@@ -421,7 +421,7 @@ PORT=5000
 DATABASE_URL=                           # chains reads work without it; accounts need it
 
 SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-CONTRACT_ADDRESS=0x464e6963cE0D833193C83Fc8Bd081614B9344b03
+CONTRACT_ADDRESS=0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
 CONTRACT_DEPLOY_BLOCK=11714309
 
 DRIPPER_PRIVATE_KEY=                    # npm run dripper:new — fund the address it prints
@@ -464,7 +464,7 @@ CONTACT_RESEND_COOLDOWN_MS=30000       # minimum gap between requests for one ad
 
 ```env
 VITE_API_URL=http://localhost:5000/api
-VITE_CONTRACT_ADDRESS=0x464e6963cE0D833193C83Fc8Bd081614B9344b03
+VITE_CONTRACT_ADDRESS=0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
 VITE_CHAIN_ID=11155111
 VITE_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 ```
@@ -812,7 +812,7 @@ Render can reach it.
 
 ```env
 VITE_API_URL=https://<your-render-service>.onrender.com/api
-VITE_CONTRACT_ADDRESS=0x464e6963cE0D833193C83Fc8Bd081614B9344b03
+VITE_CONTRACT_ADDRESS=0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
 VITE_CHAIN_ID=11155111
 ```
 
