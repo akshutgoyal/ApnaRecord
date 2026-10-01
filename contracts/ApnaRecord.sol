@@ -176,16 +176,23 @@ contract ApnaRecord is ERC721, AccessControl, ReentrancyGuard, IERC5192 {
 
     // ----------------------------------------------------------- identity
     /// @notice Register an identity.
-    ///         The platform may place anyone anywhere. A hospital may only
-    ///         register its own staff — passing its own facility, or none.
+    ///         The platform may place anyone anywhere. A hospital may register
+    ///         its own staff, and may register the patients it treats — and
+    ///         those are different things, so the facility is NOT forced.
+    ///
+    ///         A patient is a global identity with no facility; a doctor is
+    ///         staff and has one. Forcing the caller's own facility here would
+    ///         have filed every patient as hospital staff, which is exactly the
+    ///         kind of thing that looks fine until you read the row back.
     function createIdentity(address account, address facility) external {
         if (identities[account].active) revert IdentityExists();
 
         if (hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
             if (facility != address(0) && !facilities[facility]) revert NotAFacility();
         } else if (facilities[msg.sender]) {
+            // Own facility for staff, address(0) for a patient. Anything else is
+            // a hospital trying to write into another hospital's roster.
             if (facility != address(0) && facility != msg.sender) revert NotAuthorized();
-            facility = msg.sender;
         } else {
             revert NotAuthorized();
         }
@@ -336,7 +343,21 @@ contract ApnaRecord is ERC721, AccessControl, ReentrancyGuard, IERC5192 {
 
         tokenId = nextTokenId++;
         records[tokenId] = Record(recordHash, cid, uint64(block.timestamp));
-        _safeMint(patient, tokenId);
+
+        // `_mint`, deliberately, NOT `_safeMint`.
+        //
+        // The patient is the account contract, and `_safeMint` reverts when the
+        // receiver is a contract that does not implement `onERC721Received` —
+        // which ApnaRecordAccount does not, and has no reason to. Using
+        // `_safeMint` would have failed every mint to a real patient, and it
+        // would have failed at the last step of the flow, after the bytes were
+        // already stored.
+        //
+        // `_safeMint` exists to stop tokens being sent somewhere they cannot be
+        // recovered from. That risk does not apply here: a record is soulbound
+        // and can never move, so there is nothing to recover it from.
+        _mint(patient, tokenId);
+
         emit RecordMinted(tokenId, recordHash);
         emit Locked(tokenId);
     }

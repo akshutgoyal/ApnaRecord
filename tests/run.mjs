@@ -221,6 +221,7 @@ const suiteEnv = { API_URL: API, API_URL_2: API_2, MOCK_LOG: chainLog, CHAIN };
 // no stub chain — it is the only suite that executes a contract rather than pretending
 // to, and it is where the account's behaviour is actually established.
 await runSuite('Contract — the account, executed on a real EVM', 'contract/account.test.mjs', {});
+await runSuite('Contract — ApnaRecord, executed on a real EVM', 'contract/apnarecord.test.mjs', {});
 await runSuite('Unit — email addresses, codes, relay adapters', 'unit/email.test.mjs', {});
 await runSuite('Integration — email verification over HTTP', 'integration/contact.test.mjs', suiteEnv);
 await runSuite('Integration — wallet enrolment and funding', 'integration/wallet.test.mjs', suiteEnv);
