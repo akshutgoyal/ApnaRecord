@@ -321,19 +321,15 @@ npm run dripper:new          # prints an address and a private key
 DRIPPER_PRIVATE_KEY=paste-the-key-here
 ```
 
-Then fund the **address** it printed. Nothing in the codebase can do this step for you: no
-faucet exposes an API, and all of them are rate-limited against exactly this use. The
-practical routes, cheapest first:
+Then fund the **address** it printed — by hand, and once. Nothing in the codebase does this
+for you, and that is a decision rather than a gap. Replenishing automatically means mining
+proof-of-work on the application server to satisfy a faucet: a core burned for minutes at a
+time, and a float that depends on a third party being reachable. A manual top-up costs
+nothing, and test ETH is free.
 
-| Route | What it asks | Notes |
-|---|---|---|
-| [pk910](https://sepolia-faucet.pk910.de/) | nothing | Proof-of-work in the browser; ~20 min on a laptop per claim, no daily cap configured |
-| [QuickNode](https://faucet.quicknode.com/ethereum/sepolia) | nothing | Every 12 h; amount not published |
-| [Google Cloud](https://cloud.google.com/application/web3/faucet/ethereum/sepolia) | a Google account | No mainnet balance needed; small daily amount |
-| [Alchemy](https://www.alchemy.com/faucets/ethereum-sepolia) | ≥0.001 mainnet ETH | **Avoid for this use** — it refuses wallets that hold "too much" test ETH, which is exactly what a dripper does |
-
-At `DRIP_AMOUNT=0.01`, **one ETH covers about 100 new accounts**. Check what is left at any
-time — it is also printed on the startup banner:
+**One ETH covers about 100 new accounts**, because the float pays for the drip *and* the
+account deployment that goes with it. Check what is left at any time — it is also printed on
+the startup banner:
 
 ```bash
 curl localhost:5000/api/dripper

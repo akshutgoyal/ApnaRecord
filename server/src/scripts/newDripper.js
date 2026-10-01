@@ -1,9 +1,9 @@
 // Generate the wallet that funds everyone else.
 //
-// Run this once, paste the key into server/.env, then fund the address from a
-// faucet. Nothing in this codebase can acquire Sepolia ETH for you — every faucet
-// is rate-limited against exactly the use this wallet exists for, so the funding
-// step is manual by nature rather than by omission.
+// Run this once, paste the key into server/.env, then fund the address by hand.
+// Nothing in this codebase acquires Sepolia ETH for you, and that is deliberate:
+// replenishing automatically would mean mining proof-of-work on the application
+// server to satisfy a faucet. The float costs nothing to top up manually.
 
 import { Wallet, randomBytes, hexlify } from 'ethers';
 
@@ -15,9 +15,9 @@ console.log('');
 console.log(`  address      ${wallet.address}`);
 console.log(`  private key  ${wallet.privateKey}`);
 console.log('');
-console.log('  Next: send test ETH to the address above, then restart the API.');
-console.log('  A practical route (see README for the full comparison):');
-console.log('    https://sepolia-faucet.pk910.de/   — no account, ~20 min of mining per claim');
+console.log('  Next: fund the address above by hand, then restart the API.');
+console.log('  There is no automatic replenishment by design — it would mean mining');
+console.log('  proof-of-work on the application server to satisfy a faucet.');
 console.log('');
 console.log('  Sizing: at DRIP_AMOUNT=0.01, each ETH covers about 100 new wallets.');
 console.log('  Check what is left at any time with:  curl localhost:5000/api/dripper');
