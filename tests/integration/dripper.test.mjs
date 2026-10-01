@@ -61,13 +61,20 @@ async function enrolVia(base) {
 }
 
 const logContent = () => (fs.existsSync(MOCK_LOG) ? fs.readFileSync(MOCK_LOG, 'utf8') : '');
-/** The nonces the stub chain actually saw, in order. */
+/**
+ * Every nonce the stub chain actually saw, in order.
+ *
+ * BOTH KINDS OF SEND. This matched only `drip` lines, which was correct while enrolment
+ * made exactly one send — and silently wrong the moment enrolment began deploying an
+ * account per user, because a deploy consumes a nonce in between. The sequence then
+ * looked full of gaps while nothing had been skipped. A filter that quietly stops
+ * matching the thing it is measuring is worse than no filter.
+ */
 const noncesSeen = () =>
-  [...logContent().matchAll(/drip .*nonce=(\d+)/g)].map((match) => Number(match[1]));
+  [...logContent().matchAll(/(?:drip|deploy) .*nonce=(\d+)/g)].map((match) => Number(match[1]));
 
 group('two instances, one float');
 
-const before = noncesSeen().length;
 
 // Four against each instance, all at once. Serialised per process means each server
 // would happily start at its own counter; the database claim is what stops them
@@ -96,8 +103,15 @@ check(
   `${funded.length} of 8 reported a transaction hash`
 );
 
-const after = noncesSeen();
-const justSent = after.slice(before);
+// THE WHOLE LOG, NOT A POSITIONAL SLICE.
+//
+// An earlier version compared "the lines after this marker" against the claims this
+// suite made, which conflates two different orderings. Claims happen in one order and
+// broadcasts arrive in another, so nonces the PREVIOUS suite still had in flight when
+// the marker was taken arrive after it and land in this suite's set. That produced a
+// set like `23, 25, 27, 28, …` — apparently gappy, while every nonce had in fact been
+// sent. It failed about half the time and blamed the dripper for it.
+const allSent = noncesSeen();
 
 check(
   'the stub chain saw no nonce REUSE across instances',
@@ -107,20 +121,23 @@ check(
 
 check(
   'the nonces that went out are all distinct',
-  new Set(justSent).size === justSent.length,
-  `sent ${justSent.join(', ')}`
+  new Set(allSent).size === allSent.length,
+  `sent ${allSent.join(', ')}`
 );
 
-// Deliberately NOT asserting they arrive in order. Two instances racing produce
-// nonces that reach the node in any order, and that is what nonces are for — the
-// chain orders them, not the network. Requiring ascending arrival would fail a
-// correct implementation, which is exactly what the previous version of this suite
-// did.
+// Contiguity is still worth asserting, because a missed nonce strands every later one —
+// that is a real failure and the reason this suite exists. But it has to be asked of the
+// full set, which is the only claim the log can actually support.
+//
+// Deliberately NOT asserting they arrive in order: two instances racing produce nonces
+// that reach the node in any order, and that is what nonces are for — the chain orders
+// them, not the network. Requiring ascending arrival would fail a correct
+// implementation, which is exactly what an even earlier version of this suite did.
 check(
-  'a contiguous block was claimed, so no gap was left behind',
-  justSent.length === 0 ||
-    Math.max(...justSent) - Math.min(...justSent) === justSent.length - 1,
-  `sent ${justSent.join(', ')}`
+  'no nonce was skipped, so nothing is stranded behind a gap',
+  allSent.length === 0 ||
+    Math.max(...allSent) - Math.min(...allSent) === allSent.length - 1,
+  `sent ${allSent.join(', ')}`
 );
 
 group('the float is still accounted for');

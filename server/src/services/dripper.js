@@ -73,32 +73,47 @@ function serialise(task) {
  * The serialisation below is kept, but only as an optimisation: it stops one busy
  * process from piling concurrent claims onto the database. It is not what makes this
  * safe, and removing it would not introduce a bug.
+ *
+ * AFTER THE FIRST CLAIM, THE COUNTER ONLY EVER MOVES BY ONE. An earlier version also
+ * snapped it forward to the chain's count on every call, on the reasoning that a nonce
+ * too high is "merely a gap, which later transactions fill in on their own". That
+ * reasoning is wrong, and the snap was unsafe for two independent reasons:
+ *
+ *   • Nonces must be sequential. If 25 is never sent, then 26, 27, 28 sit in the
+ *     mempool and never mine — the dripper does not recover, it stalls for good.
+ *   • `$set` is a blind write that jumps to a value rather than stepping to it, so it
+ *     skips whatever lies between the counter and the chain's count. A concurrent
+ *     `$inc` landing between the read and the write is silently lost too.
+ *
+ * The counter is incremented BEFORE every send, so it can never legitimately be behind
+ * the chain, and there is nothing for a snap to recover. The chain is therefore
+ * consulted exactly once, when the counter does not exist yet.
+ *
+ * One correction on the record. This was removed while chasing an intermittent "gap"
+ * failure in the cross-instance suite. It was not the cause, and neither of my first two
+ * explanations was: the suite counted only `drip` lines, and enrolment had started
+ * deploying an account per user, so every deploy consumed a nonce between two drips and
+ * the sequence looked gappy while nothing had been skipped. Instrumenting the send paths
+ * proved it — no send ever threw. The snap is still worth removing on its own merits;
+ * it just was not fixing the symptom that led here.
  */
+let seeded = false;
+
 async function claimNonce() {
   const w = getWallet();
   const key = w.address.toLowerCase();
 
-  // The chain is the floor. Right after a broadcast the node still reports the old
-  // count, so we never take its word over our own — but if it has moved AHEAD of us
-  // (a send we lost track of, or a restart after a crash) we follow it.
-  const onChain = await w.provider.getTransactionCount(w.address, 'pending');
-
-  await DripperModel.updateOne(
-    { address: key },
-    { $setOnInsert: { address: key, nextNonce: onChain } },
-    { upsert: true }
-  );
-
-  // NEVER MOVE BACKWARDS.
-  //
-  // A nonce too LOW is reused, and a reused nonce either replaces a pending
-  // transaction or is rejected outright — a stuck queue, with every send looking
-  // successful. A nonce too HIGH is merely a gap, which later transactions fill in on
-  // their own. So the higher of the two wins, and the counter only ever moves up.
-  await DripperModel.updateOne(
-    { address: key, nextNonce: { $lt: onChain } },
-    { $set: { nextNonce: onChain } }
-  );
+  // `$setOnInsert` and nothing else. If the document exists we trust it, because it is
+  // only ever advanced by one, immediately before a send that is about to happen.
+  if (!seeded) {
+    const onChain = await w.provider.getTransactionCount(w.address, 'pending');
+    await DripperModel.updateOne(
+      { address: key },
+      { $setOnInsert: { address: key, nextNonce: onChain } },
+      { upsert: true }
+    );
+    seeded = true;
+  }
 
   // `new: false` returns the document as it was BEFORE the increment, which is the
   // nonce being claimed. Two callers racing here get different values, because $inc
@@ -115,16 +130,45 @@ async function claimNonce() {
   return claimed.nextNonce;
 }
 
+/**
+ * Give a nonce back after a send that never reached the node.
+ *
+ * A claimed nonce that is never broadcast is exactly the gap the comment above warns
+ * about, so it has to be handed back rather than abandoned. The update is a
+ * compare-and-swap: it only applies while the counter is still immediately after our
+ * claim. If anything else has claimed since, reclaiming would collide with it, and a
+ * rare real gap beats a reused nonce.
+ */
+async function releaseNonce(nonce) {
+  try {
+    const w = getWallet();
+    await DripperModel.updateOne(
+      { address: w.address.toLowerCase(), nextNonce: nonce + 1 },
+      { $set: { nextNonce: nonce } }
+    );
+  } catch (error) {
+    // Releasing is best-effort. Failing here must not mask the send error that caused
+    // it, which is the one worth reporting.
+    console.warn('[Dripper] Could not release nonce', nonce, '-', error.message);
+  }
+}
+
 async function send(to, value) {
   const w = getWallet();
+  const nonce = await claimNonce();
   try {
-    const nonce = await claimNonce();
     const tx = await w.sendTransaction({ to, value, nonce });
     return tx.hash;
   } catch (error) {
-    // Deliberately NOT resetting the tracked nonce. A failed broadcast says nothing
-    // about whether the node accepted it, and re-reading the chain here is what let a
-    // stale value reuse a nonce. Leaving the counter advanced costs us at most a gap.
+    // A failure BEFORE the broadcast means the nonce was never used, so it has to go
+    // back — abandoning it is the permanent gap that stalls everything after it.
+    //
+    // A failure AT the broadcast is ambiguous: the node may be holding the
+    // transaction. The nonce stays spent, because a rare gap is survivable and a
+    // reused nonce is not.
+    if (error?.action !== 'sendTransaction') {
+      await releaseNonce(nonce);
+    }
     throw error;
   }
 }
@@ -145,7 +189,16 @@ export async function deployContract(data) {
   const w = getWallet();
   const nonce = await claimNonce();
 
-  const tx = await w.sendTransaction({ data, nonce });
+  let tx;
+  try {
+    tx = await w.sendTransaction({ data, nonce });
+  } catch (error) {
+    if (error?.action !== 'sendTransaction') {
+      await releaseNonce(nonce);
+    }
+    throw error;
+  }
+
   const receipt = await tx.wait();
 
   const address = receipt?.contractAddress;
