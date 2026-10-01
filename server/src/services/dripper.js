@@ -115,6 +115,24 @@ async function claimNonce() {
     seeded = true;
   }
 
+  // NOTE — why there is no "reconcile against the chain" step here.
+  //
+  // It is tempting. After an ambiguous failure the counter sits one ahead of what the
+  // node has, and because nonces are sequential that single skipped value stalls every
+  // drip behind it, so rewinding to the node's count would heal it.
+  //
+  // It is also unsafe, and the two-instance suite proves it. Any guard for it has to be
+  // per-process, but the counter is shared across processes: one server can be mid-send —
+  // so the node still counts below the counter — while another concludes the counter is
+  // ahead and rewinds it. Both then claim the same nonce, which is the reuse this file
+  // exists to prevent, and a process-local guard cannot see the other process's claim.
+  //
+  // Doing it correctly needs the in-flight count to live in the shared document. That is
+  // a larger change than this fix, so the gap is accepted deliberately — and it is the
+  // cheaper of the two failures. A gap stalls drips visibly; a reused nonce loses funds
+  // silently while the ledger records a hash. Recovering from a gap is a one-off reset of
+  // the counter document.
+
   // `new: false` returns the document as it was BEFORE the increment, which is the
   // nonce being claimed. Two callers racing here get different values, because $inc
   // is atomic.
@@ -153,6 +171,36 @@ async function releaseNonce(nonce) {
   }
 }
 
+/**
+ * Failures we can positively place BEFORE the transaction reached the node.
+ *
+ * Only these hand the nonce back. Anything else — a broadcast the node may have accepted,
+ * or an error with no `action` at all — leaves the nonce spent.
+ */
+const PRE_BROADCAST_ACTIONS = new Set([
+  'estimateGas',
+  'getTransactionCount',
+  'getFeeData',
+  'getGasPrice',
+  'getBlock',
+  'getBlockNumber',
+  'populateTransaction',
+  'call',
+]);
+
+/**
+ * Whether a failed send is known to have never reached the node.
+ *
+ * Exported and pure so the rule can be asserted. It was previously an inline
+ * `error?.action !== 'sendTransaction'`, which no test could see and which was wrong in
+ * the expensive direction: ethers attaches no `action` to an `eth_sendRawTransaction`
+ * failure, so it released the nonce on every failure, including ones where the node
+ * might be holding the transaction.
+ */
+export function nonceWasUnused(error) {
+  return PRE_BROADCAST_ACTIONS.has(error?.action);
+}
+
 async function send(to, value) {
   const w = getWallet();
   const nonce = await claimNonce();
@@ -166,7 +214,17 @@ async function send(to, value) {
     // A failure AT the broadcast is ambiguous: the node may be holding the
     // transaction. The nonce stays spent, because a rare gap is survivable and a
     // reused nonce is not.
-    if (error?.action !== 'sendTransaction') {
+    //
+    // This test used to read `error?.action !== 'sendTransaction'`, as though ethers
+    // labelled a broadcast failure that way. It does not. An `eth_sendRawTransaction`
+    // failure is built by `getRpcError()` with no `action` field at all, so the
+    // comparison was true for EVERY failure and the nonce went back even when the
+    // transaction might be live — which is precisely the reuse case, and reuse is the
+    // one outcome that loses funds silently while the ledger records a hash.
+    //
+    // So the test is inverted: release only on an action known to be pre-broadcast.
+    // Being wrong in this direction costs a gap; being wrong the other way costs money.
+    if (nonceWasUnused(error)) {
       await releaseNonce(nonce);
     }
     throw error;
@@ -193,7 +251,10 @@ export async function deployContract(data) {
   try {
     tx = await w.sendTransaction({ data, nonce });
   } catch (error) {
-    if (error?.action !== 'sendTransaction') {
+    // Same rule as `send`: only a failure we can place before the broadcast gives the
+    // nonce back. A deploy is the more expensive of the two to get wrong, so it is the
+    // more important that an ambiguous failure leaves the nonce spent.
+    if (nonceWasUnused(error)) {
       await releaseNonce(nonce);
     }
     throw error;

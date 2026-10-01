@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import { Wallet } from 'ethers';
 import { createWallet, sealPrivateKey, generateRecoveryCode } from '../../client/src/lib/keystore.js';
 import { enrolMessage } from '../../client/src/lib/wireMessages.js';
+import { nonceWasUnused } from '../../server/src/services/dripper.js';
 import { check, group, report } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
@@ -148,5 +149,36 @@ check(
   Number.isFinite(Number(dripper.balanceEth)),
   String(dripper.balanceEth)
 );
+
+// ---------------------------------------------------------------- the nonce rule
+//
+// Whether a failed send gives its nonce back is the difference between a gap and a
+// reused nonce, and reuse loses funds silently. The rule used to be an inline
+// `error?.action !== 'sendTransaction'`, which read as though ethers labelled a
+// broadcast failure that way. It does not — an eth_sendRawTransaction failure carries no
+// `action` at all — so the comparison was true for every failure and the nonce went back
+// even when the node might be holding the transaction. Nothing asserted it, so it
+// survived. These are the assertions that would have caught it.
+
+group('the nonce rule');
+
+check(
+  'a broadcast failure with no action at all keeps the nonce spent',
+  nonceWasUnused({ code: 'SERVER_ERROR' }) === false,
+  'this is the shape ethers actually produces for eth_sendRawTransaction'
+);
+check(
+  'an explicit broadcast failure keeps the nonce spent',
+  nonceWasUnused({ action: 'sendTransaction' }) === false
+);
+check(
+  'an unrecognised action keeps the nonce spent',
+  nonceWasUnused({ action: 'somethingNewInEthers' }) === false,
+  'the default has to be "spent" — being wrong that way costs a gap, not a reuse'
+);
+check('estimation failed before broadcast, so the nonce is free', nonceWasUnused({ action: 'estimateGas' }) === true);
+check('the nonce read failed before broadcast', nonceWasUnused({ action: 'getTransactionCount' }) === true);
+check('fee estimation failed before broadcast', nonceWasUnused({ action: 'getFeeData' }) === true);
+check('a null error is treated as ambiguous', nonceWasUnused(null) === false);
 
 report();
