@@ -174,10 +174,23 @@ export async function recordIdentity(req, res) {
     if (!admin) {
       const facilityWallet = await isFacility(signer);
       if (!facilityWallet) {
-        return res.status(403).json({ error: 'NotAuthorized', message: 'Only the platform or a hospital IT wallet may register identities.' });
+        // Naming the address is the whole point. This refusal is decided from the
+        // SIGNER the signature recovers to, which is not necessarily the account the
+        // app has on screen — a wallet holding several accounts can sign with a
+        // different one than the header shows. Without the address the message reads
+        // as "you are not allowed", when the truth is usually "that was not you".
+        return res.status(403).json({
+          error: 'NotAuthorized',
+          signer,
+          message: `${signer} is neither the platform nor a hospital IT wallet, so it cannot register identities. If that is not the account you expected, your wallet signed with a different one.`,
+        });
       }
       if (facilityAddr && facilityAddr.toLowerCase() !== signer.toLowerCase()) {
-        return res.status(403).json({ error: 'NotAuthorized', message: 'A hospital may only place identities in its own facility.' });
+        return res.status(403).json({
+          error: 'NotAuthorized',
+          signer,
+          message: `${signer} may only place identities in its own facility, and this one names ${facilityAddr}.`,
+        });
       }
     }
 
