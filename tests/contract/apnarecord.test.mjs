@@ -456,4 +456,127 @@ check(
   'AccessDenied'
 );
 
+// ------------------------------------------------- break-glass, burn and retire
+//
+// The three writes the rest of the suite never reached. Each one either hands access
+// out or takes a record away, so each is worth proving rather than assuming — and two
+// of them are the only routes that can undo something a patient owns.
+
+group('break-glass');
+
+const managerRole = await apna.MANAGER_ROLE();
+const clinician = await signerFor(8);
+const clinicianAddress = await clinician.getAddress();
+const outsider = await signerFor(9);
+const outsiderAddress = await outsider.getAddress();
+
+await (await apna.connect(admin).grantRole(managerRole, clinicianAddress)).wait();
+
+check(
+  'a wallet without MANAGER_ROLE cannot break the glass',
+  (await revertName(
+    apna.connect(outsider).emergencyAccess.staticCall(1, outsiderAddress),
+    iface
+  )) === 'AccessControlUnauthorizedAccount',
+  'role-gated'
+);
+check(
+  'breaking the glass on a record that does not exist is refused',
+  (await revertName(
+    apna.connect(clinician).emergencyAccess.staticCall(9999, clinicianAddress),
+    iface
+  )) === 'RecordNotFound',
+  'RecordNotFound'
+);
+
+const breakTx = await (await apna.connect(clinician).emergencyAccess(1, outsiderAddress)).wait();
+const breakNames = breakTx.logs
+  .map((log) => { try { return iface.parseLog(log)?.name; } catch { return null; } })
+  .filter(Boolean);
+
+check('the clinician can break the glass', await apna.canAccess(1, outsiderAddress));
+// The distinction matters for the audit trail. Break-glass is a clinician reading
+// without the patient, and an auditor has to be able to tell that apart from a
+// patient who chose to share — which is only true if the two emit different events.
+check(
+  'and it is logged as an emergency, not as a consented grant',
+  breakNames.includes('EmergencyAccessUsed') && !breakNames.includes('AccessGranted'),
+  breakNames.join(', ')
+);
+
+// The window is one hour, and the contract is what closes it. A read of `canAccess`
+// now would pass even if the expiry were in the year 3000, so the chain is advanced
+// past it — the only way to prove a timeout actually times out.
+await evm.request({ method: 'evm_increaseTime', params: [3599] });
+await evm.request({ method: 'evm_mine', params: [] });
+// Still open a second short of the hour. Without this the check below would pass just
+// as happily for a window of one second, and would be proving almost nothing.
+check(
+  'the window is still open just short of the hour',
+  await apna.canAccess(1, outsiderAddress),
+  'not yet expired'
+);
+
+await evm.request({ method: 'evm_increaseTime', params: [2] });
+await evm.request({ method: 'evm_mine', params: [] });
+check(
+  'and closes at the hour rather than never',
+  !(await apna.canAccess(1, outsiderAddress)),
+  'expired'
+);
+
+group('revocation');
+
+const burnDigest = ethers.keccak256(ethers.toUtf8Bytes('a-record-to-burn'));
+const burnTx = await (await apna.connect(hospital).mintRecord(secondAddress, burnDigest, 'local://z')).wait();
+const burnToken = Number(
+  burnTx.logs
+    .map((log) => { try { return iface.parseLog(log); } catch { return null; } })
+    .find((parsed) => parsed?.name === 'RecordMinted').args[0]
+);
+
+check(
+  'a hospital cannot revoke a record',
+  (await revertName(apna.connect(hospital).revokeRecord.staticCall(burnToken), iface)) ===
+    'AccessControlUnauthorizedAccount',
+  'admin-only'
+);
+await (await apna.connect(admin).revokeRecord(burnToken)).wait();
+check(
+  'the burned record no longer exists',
+  (await revertName(apna.ownerOf.staticCall(burnToken), iface)) === 'ERC721NonexistentToken',
+  'gone from supply'
+);
+check(
+  'and revoking it twice is refused rather than silently succeeding',
+  (await revertName(apna.connect(admin).revokeRecord.staticCall(burnToken), iface)) ===
+    'RecordNotFound',
+  'RecordNotFound'
+);
+
+group('retiring an identity');
+
+const strangerAddress = await stranger.getAddress();
+
+check(
+  'a hospital cannot retire an identity',
+  (await revertName(apna.connect(hospital).deactivateIdentity.staticCall(strangerAddress), iface)) ===
+    'AccessControlUnauthorizedAccount',
+  'admin-only'
+);
+await (await apna.connect(admin).deactivateIdentity(strangerAddress)).wait();
+check('the identity is retired', (await apna.identities(strangerAddress))[1] === false);
+check(
+  'a retired identity cannot be linked',
+  (await revertName(apna.connect(hospital).requestPatientLink.staticCall(strangerAddress), iface)) ===
+    'IdentityNotFound',
+  'IdentityNotFound'
+);
+check(
+  'and retiring it twice is refused',
+  (await revertName(apna.connect(admin).deactivateIdentity.staticCall(strangerAddress), iface)) ===
+    'IdentityNotFound',
+  'IdentityNotFound'
+);
+
 report();
