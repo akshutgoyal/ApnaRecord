@@ -531,14 +531,20 @@ export async function requestDrip(req, res) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }
 
-  const problem = verify(dripMessage(address, timestamp), address, timestamp, signature);
-  if (problem) return res.status(403).json({ error: 'SignatureInvalid', message: problem });
-
   try {
     const enrolment = await EnrolmentModel.findOne({ address: address.toLowerCase() }).lean();
     if (!enrolment) {
       return res.status(404).json({ error: 'NotEnrolled', message: 'That wallet is not enrolled.' });
     }
+
+    // `:address` is the DEPLOYED ACCOUNT — the enrolment is keyed by it — and the
+    // signature comes from its `owner`, the key. The account is a contract and cannot
+    // sign, so verifying against `address` refused every genuine request. That made the
+    // automatic top-up silently dead, and it failed in the worst way available: the
+    // client reports "the float did not send", which reads like an empty dripper rather
+    // than a signature check that could never pass. Same rule as `rotateRecovery`.
+    const problem = verify(dripMessage(address, timestamp), enrolment.owner, timestamp, signature);
+    if (problem) return res.status(403).json({ error: 'SignatureInvalid', message: problem });
 
     const result = await ensureFunded(address, {
       reason: 'top-up',

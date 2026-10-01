@@ -71,7 +71,16 @@ export async function runIndexer({ log = () => {} } = {}) {
       {
         $set: {
           account: identity.account.toLowerCase(),
-          facility: String(identity.facility || '').toLowerCase(),
+          // `address(0)` is the chain's "no facility" sentinel; the API's is the empty
+          // string. Passing the sentinel straight through rewrote every patient's facility
+          // to the zero address on every pass, which made this write non-idempotent:
+          // `identityWriteVerdict` compares against `''`, so re-sending the identical
+          // POST /identities started returning 409 `IdentityExists`, and the directory
+          // could read a patient as belonging to a facility.
+          facility:
+            identity.facility && identity.facility !== '0x0000000000000000000000000000000000000000'
+              ? identity.facility.toLowerCase()
+              : '',
           active: identity.active,
           registeredAtBlock: identity.registeredAtBlock,
           roles: identity.roles,
@@ -93,6 +102,23 @@ export async function runIndexer({ log = () => {} } = {}) {
   for (let tokenId = 1; tokenId < nextTokenId; tokenId++) {
     const meta = await recordMeta(tokenId);
     if (!meta) continue;
+
+    // A REVOKED RECORD HAS NO OWNER. `recordMeta` returns `patient: null` for a burned
+    // token, and calling `.toLowerCase()` on that threw out of the whole pass. Because the
+    // pass is scheduled, the first revoke anyone performed would have stopped event
+    // mirroring for good — silently, since the API keeps answering from the stale rows it
+    // already had. Marking the row instead keeps the pass alive and keeps the record
+    // honest about what it is.
+    if (!meta.patient) {
+      // `updateOne`, not an upsert: the row is created by the upload and only ever
+      // updated here. An upsert would try to insert a record with none of the required
+      // fields — `recordType`, `recordHash`, `sealedKey` — and throw a validation error
+      // where the point is to keep the pass from throwing.
+      await RecordModel.updateOne({ tokenId }, { $set: { burned: true } });
+      recordCount++;
+      continue;
+    }
+
     await RecordModel.findOneAndUpdate(
       { tokenId },
       {
@@ -100,6 +126,7 @@ export async function runIndexer({ log = () => {} } = {}) {
         patient: meta.patient.toLowerCase(),
         recordType: meta.recordType,
         recordHash: meta.recordHash.toLowerCase(),
+        burned: false,
         mintedAtBlock: meta.mintedAtBlock,
         mintedTx: meta.mintedTx,
       },

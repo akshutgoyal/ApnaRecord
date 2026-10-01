@@ -174,7 +174,13 @@ export async function saveSession({ address, privateKey, method, deviceKey, cred
     await idbPut(SESSION_STORE, RECORD_ID, {
       address,
       method,
-      credentialId: credentialId ?? null,
+      // Encoded like the salts, and for a sharper reason. This arrives as an ArrayBuffer
+      // (`credential.rawId`) and the unlock path decodes it with `decodeBytes`, so storing
+      // it raw handed `atob` the string "[object ArrayBuffer]", which throws. The passkey
+      // path therefore could never unlock a second browser session — it failed silently
+      // into "type your 20-character recovery code again", which is the exact outcome the
+      // whole device-unlock design exists to prevent.
+      credentialId: credentialId ? encodeBytes(new Uint8Array(credentialId)) : null,
       // Only the salt is kept. The PIN itself is never stored, and neither is the PRF
       // output — both are re-derived from the device on each new browser session.
       prfSalt: prfSalt ? encodeBytes(new Uint8Array(prfSalt)) : null,

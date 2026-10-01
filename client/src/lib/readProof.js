@@ -9,7 +9,7 @@
 // to this contract on this chain — a signature harvested here cannot be replayed
 // against another deployment.
 
-import { getAddress, hexlify, randomBytes } from 'ethers';
+import { Contract, getAddress, hexlify, randomBytes } from 'ethers';
 // With the extension so this module can be imported by Node as well as Vite. That
 // matters here: the read proof is a contract between two codebases, and the test
 // suite imports THIS file to prove the client and server agree on the domain.
@@ -36,17 +36,30 @@ export const READ_TYPES = {
 /**
  * Sign a read proof and return it as request headers.
  *
- * `viewer` must be the address the signer actually controls — the server recovers
- * the signer and requires the two to match, so passing someone else's address
- * produces a 401 rather than a record.
+ * `viewer` is the address whose access the contract will judge. Usually that is the
+ * signer, but for a record owned by an account it is the ACCOUNT and the signature
+ * comes from the key that owns it — a contract cannot sign, so an account could
+ * otherwise never read its own records, which is every record created since enrolment
+ * started deploying one. The server accepts exactly that pair.
+ *
+ * This pre-check exists only to turn a confusing 401 into a clear sentence, so it must
+ * stay no stricter than the server. It was stricter once, and it rejected the account
+ * case before a signature was ever produced: every enrolled patient was unable to open
+ * their own record, with an error telling them to ask themselves for access.
  */
 export async function readProofHeaders(signer, { tokenId, viewer }) {
   const address = await signer.getAddress();
+
   if (address.toLowerCase() !== String(viewer).toLowerCase()) {
-    throw new Error(
-      `You are signed in as ${address}, so you cannot prove you are ${viewer}. ` +
-        'Ask the patient to grant access to your own address.'
-    );
+    const account = new Contract(viewer, ['function owner() view returns (address)'], signer.provider);
+    const owner = await account.owner().catch(() => null);
+
+    if (!owner || owner.toLowerCase() !== address.toLowerCase()) {
+      throw new Error(
+        `You are signed in as ${address}, so you cannot prove you are ${viewer}. ` +
+          'Ask the patient to grant access to your own address.'
+      );
+    }
   }
 
   const issuedAt = Date.now();

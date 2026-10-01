@@ -5,8 +5,16 @@ export const isDbReady = () => mongoose.connection.readyState === 1;
 const RecordSchema = new mongoose.Schema(
   {
     tokenId: { type: Number, required: true, unique: true, index: true },
-    patient: { type: String, required: true, index: true, lowercase: true },
+    // Empty for a revoked record: `revokeRecord` burns the token, so the chain has no
+    // owner left to name. It cannot be `required` any more — the indexer mirrors the
+    // burned state instead of crashing on it.
+    patient: { type: String, default: '', index: true, lowercase: true },
     recordType: { type: String, required: true },
+    // Set when the token has been revoked and burned. The dashboards render it, so it has
+    // to be a real field: the records list used to hardcode `burned: false`, which meant a
+    // revoked record was presented as live on the browse index while the chain said
+    // otherwise.
+    burned: { type: Boolean, default: false },
     // keccak256 of the ciphertext. Also the on-disk blob name and the on-chain anchor.
     recordHash: { type: String, required: true, unique: true, index: true, lowercase: true },
     cid: { type: String, default: '' },

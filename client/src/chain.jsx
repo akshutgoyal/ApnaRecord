@@ -375,7 +375,12 @@ export function ChainProvider({ children }) {
   const topUpGas = useCallback(async () => {
     const local = getLocalSigner();
     if (!local) throw new Error('Only a wallet created here can be topped up.');
-    return ensureGas(local);
+    // The ACCOUNT, not the signing key. The server keys enrolments by the account, funds
+    // the account, and the account is what sends transactions; the key holds no records
+    // and spends nothing. Omitting it funded the key and then asked to top up an address
+    // that was never enrolled, so the button could only ever fail — and `gas.js` states
+    // this invariant in its own comment.
+    return ensureGas(local, sessionAddress());
   }, []);
 
   /**

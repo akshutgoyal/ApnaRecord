@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'ethers';
 import { useChain, shortAddress } from '../chain';
 import { DEMO_ACCOUNTS } from '../config/demoAccounts';
@@ -19,6 +19,19 @@ export default function AddressInput({
 }) {
   const { account } = useChain();
   const [text, setText] = useState(value || '');
+
+  // Mirror the controlled value back into the field.
+  //
+  // Without this, every caller that cleared its address after a successful write left the
+  // old address sitting in the input: the parent believed the field was empty, the user
+  // saw a filled one, and re-submitting the same value was the obvious next move — which
+  // then reverted with `IdentityExists` and read like the app refusing valid input.
+  //
+  // Syncing unconditionally is safe here because `commit` echoes exactly what was typed,
+  // so during normal editing the incoming value already equals the local one.
+  useEffect(() => {
+    setText(value || '');
+  }, [value]);
 
   const excluded = useMemo(() => exclude.map((a) => String(a).toLowerCase()), [exclude]);
   const chips = DEMO_ACCOUNTS.filter((a) => !excluded.includes(a.address.toLowerCase()));

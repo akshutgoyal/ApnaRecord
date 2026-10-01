@@ -212,8 +212,19 @@ export function DataTable({
 
   // Reset when the row set changes underneath the cursor, or a stale row index
   // leaves focus pointing at nothing.
+  //
+  // The empty case has to be explicit. With `count === 0`, `cursor.row >= count` is true
+  // for every cursor, and the reset assigns a NEW object — which is never identical to the
+  // old one, and `cursor` is a dependency — so the effect re-ran every render until React
+  // threw "Maximum update depth exceeded". Filtering a table down to no matches is an
+  // ordinary thing to do, and it blanked the panel behind its own error boundary.
   useEffect(() => {
-    if (cursor && cursor.row >= count) setCursor({ row: 0, column: 0 });
+    if (!cursor) return;
+    if (count === 0) {
+      setCursor(null);
+      return;
+    }
+    if (cursor.row >= count) setCursor({ row: 0, column: 0 });
   }, [count, cursor]);
 
   const focusCell = (rowIndex, columnIndex) => {

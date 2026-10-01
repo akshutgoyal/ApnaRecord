@@ -75,7 +75,12 @@ export async function listRecords(req, res) {
               mimeType: d.mimeType,
               sizeBytes: d.sizeBytes,
               locked: true,
-              burned: false,
+              // Not hardcoded. `revokeRecord` burns the token but the row stays, so a
+              // constant `false` here presented revoked records as live on the browse
+              // index — and every dashboard renders `burned`, so they all showed the
+              // wrong state. The chain branch below reads the real value; this one now
+              // does too.
+              burned: Boolean(d.burned),
               mintedAtBlock: d.mintedAtBlock,
               mintedTx: d.mintedTx,
             })),
