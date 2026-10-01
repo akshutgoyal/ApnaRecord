@@ -201,7 +201,7 @@ export default function RecordReader({ tokenId, viewer, record, onBack, backLabe
           ) : (
             <section className="rounded-lg border border-line bg-white p-3.5">
               <h3 className="text-xs font-semibold text-ink">This record is not text</h3>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+              <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
                 The contract released it and it decrypted cleanly, but the contents are binary —
                 a scan or an image, most likely. Rendering that as text would produce nonsense, so
                 the file is offered instead.
@@ -229,7 +229,7 @@ export default function RecordReader({ tokenId, viewer, record, onBack, backLabe
               Released by <span className="mono normal-case tracking-normal">{state.released.checkedBy}</span>
             </p>
             <p className="mono mt-1 break-all text-slate-600">{state.released.recordHash}</p>
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            <p className="mt-2 text-[13px] leading-relaxed text-slate-500">
               The file location the contract released was{' '}
               <span className="mono">{state.released.cid || '(empty)'}</span>. The bytes were
               decrypted in this browser — the server never held the plaintext.

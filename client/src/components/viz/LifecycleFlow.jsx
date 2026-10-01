@@ -100,15 +100,15 @@ function Step({ step }) {
         </div>
 
         <p className="text-xs font-semibold leading-snug text-ink">{step.title}</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{step.detail}</p>
+        <p className="mt-1 text-[13px] leading-relaxed text-slate-500">{step.detail}</p>
 
         {step.decision && (
           <div className="mt-2 space-y-1">
             <p className="mono text-[10px] text-marigold-700">{step.decision.question}</p>
-            <p className="rounded border border-error-200 bg-error-50 px-1.5 py-1 text-[10px] leading-snug text-error-700">
+            <p className="rounded border border-error-200 bg-error-50 px-1.5 py-1 text-[12px] leading-snug text-error-700">
               ✕ {step.decision.no}
             </p>
-            <p className="rounded border border-success-200 bg-success-50 px-1.5 py-1 text-[10px] leading-snug text-success-700">
+            <p className="rounded border border-success-200 bg-success-50 px-1.5 py-1 text-[12px] leading-snug text-success-700">
               ✓ {step.decision.yes}
             </p>
           </div>

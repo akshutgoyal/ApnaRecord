@@ -270,7 +270,7 @@ export default function PatientDashboard() {
               label="Fields completed"
               sublabel={`${profileFields} / 5`}
             />
-            <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+            <p className="mt-3 text-[13px] leading-relaxed text-slate-500">
               The chain never learns your name. Whatever you put here is signed by your wallet,
               editable only by you, and deletable at any time.
             </p>
@@ -475,7 +475,7 @@ export default function PatientDashboard() {
                   Digest anchored on-chain
                 </p>
                 <p className="mono mt-1 break-all text-slate-700">{drawer.recordHash}</p>
-                <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                <p className="mt-2 text-[13px] leading-relaxed text-slate-500">
                   This is keccak256 of the encrypted file. Anyone holding the file can recompute it and
                   check it against this value — that is what{' '}
                   <Link to="/verify" className="text-peacock-700 underline">

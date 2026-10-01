@@ -351,7 +351,7 @@ export default function Patient() {
                 >
                   {isBusy('grantAccess') ? <Busy label="Confirming…" /> : 'grantAccess'}
                 </button>
-                <p className="text-[11px] leading-relaxed text-slate-500">
+                <p className="text-[13px] leading-relaxed text-slate-500">
                   Pick 60 seconds to watch the read stop working on its own, with no further action
                   from anyone.
                 </p>

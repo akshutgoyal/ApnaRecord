@@ -33,9 +33,39 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Warm focus ring everywhere, so keyboard navigation is obvious on paper. */
+  /* Warm focus ring everywhere, so keyboard navigation is obvious on paper.
+   *
+   * 3px rather than 2px, and a solid peacock rather than 45% opacity. The old ring
+   * was ~2px of translucent teal, which at the size these controls actually are — an
+   * 11px label inside a 32px button — reads as a faint smudge rather than a focus
+   * state. WCAG 2.2 added SC 2.4.11 (Focus Not Obscured) at AA, and the existing ring
+   * satisfied neither that nor the AAA appearance criteria convincingly.
+   *
+   * The darker peacock keeps it inside the palette instead of borrowing GOV.UK's
+   * yellow, which would fight the marigold that already means "time-bound". */
   :focus-visible {
-    @apply outline-none ring-2 ring-peacock-500/45 ring-offset-1 ring-offset-paper;
+    @apply outline-none ring-[3px] ring-peacock-700/70 ring-offset-2 ring-offset-paper;
+  }
+
+  /* Every interactive control gets a 44px target without growing visibly.
+   *
+   * WCAG 2.2 SC 2.5.8 sets 24x24 as the AA floor and SC 2.5.5 sets 44x44 as AAA, and
+   * health interfaces are used on phones by people who may be older, in a hurry, or
+   * on a cracked screen. The visual button stays 32px tall — inflating it to 44px
+   * would change the density the whole dashboard is built on — so the target is
+   * expanded with a pseudo-element instead. `position: relative` on the button puts
+   * the ::before in the right stacking context. */
+  .btn {
+    position: relative;
+  }
+  .btn::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: max(100%, 2.75rem);
+    height: max(100%, 2.75rem);
   }
 
   ::selection {
@@ -68,22 +98,21 @@
   /* -------------------------------------------------------------- buttons */
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm
-           font-medium transition focus:outline-none focus-visible:ring-2
-           focus-visible:ring-peacock-500/45 focus-visible:ring-offset-1
+           font-medium transition focus:outline-none focus-visible:ring-[3px]
+           focus-visible:ring-peacock-700/70 focus-visible:ring-offset-2
            disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .btn-primary {
-    @apply btn bg-peacock-600 text-white hover:bg-peacock-700 focus-visible:ring-peacock-500/45;
+    @apply btn bg-peacock-600 text-white hover:bg-peacock-700;
   }
 
   .btn-secondary {
-    @apply btn border border-line-strong bg-white text-ink hover:bg-slate-50
-           focus-visible:ring-peacock-500/30;
+    @apply btn border border-line-strong bg-white text-ink hover:bg-slate-50;
   }
 
   .btn-danger {
-    @apply btn bg-error-600 text-white hover:bg-error-700 focus-visible:ring-error-600/40;
+    @apply btn bg-error-600 text-white hover:bg-error-700 focus-visible:ring-error-700/70;
   }
 
   .btn-ghost {

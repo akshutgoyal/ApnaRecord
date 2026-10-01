@@ -256,7 +256,7 @@ export default function Doctor() {
             >
               {isBusy('emergencyAccess') ? <Busy label="Confirming…" /> : 'emergencyAccess'}
             </button>
-            <p className="text-[11px] leading-relaxed text-slate-600">
+            <p className="text-[13px] leading-relaxed text-slate-600">
               This is the honest exception to patient control. It is capped at one hour and the
               EmergencyAccessUsed event names the record and the clinician, so it is auditable even
               though it is not based on consent. No reason text goes on-chain — state it to the
@@ -374,7 +374,7 @@ function ReleasedRecord({ record, onClose }) {
         </Callout>
       )}
 
-      <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+      <p className="mt-3 text-[13px] leading-relaxed text-slate-500">
         You received this because the contract ran <span className="mono">viewRecord</span> as your
         address and it did not revert. Revoke the consent window and this same request returns
         AccessDenied instead.

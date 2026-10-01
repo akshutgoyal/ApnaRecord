@@ -340,7 +340,7 @@ export default function Enrol() {
           </p>
         </div>
 
-        <p className="mt-4 text-[11px] leading-relaxed text-slate-500">
+        <p className="mt-4 text-[13px] leading-relaxed text-slate-500">
           A second recovery method — an extra printed code, a passkey on another device, or a
           guardian who can approve a reset after a waiting period — is designed but not built yet.
           Until it is, this code is the only way in.
@@ -479,7 +479,7 @@ export default function Enrol() {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
-          <span className="mt-1 block text-[11px] leading-relaxed text-slate-500">
+          <span className="mt-1 block text-[13px] leading-relaxed text-slate-500">
             One code to prove the address is yours. We keep only a masked form —{' '}
             <span className="mono">a•••@example.com</span> — never the address itself, and never
             on the chain. It is how you find this wallet again on a new device.

@@ -48,7 +48,7 @@ export default function ExpiryWatchlist({ items = [], title = 'Expiring soon', n
         ))}
       </ul>
 
-      <p className="border-t border-marigold-200/70 px-4 py-2 text-[11px] leading-relaxed text-marigold-700/80">
+      <p className="border-t border-marigold-200/70 px-4 py-2 text-[13px] leading-relaxed text-marigold-700/80">
         Nobody has to act on these. The contract closes each window on time, by itself.
       </p>
     </section>

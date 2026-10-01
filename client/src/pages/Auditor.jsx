@@ -314,7 +314,7 @@ export default function Auditor() {
           </ol>
         )}
 
-        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+        <p className="mt-3 text-[13px] leading-relaxed text-slate-500">
           Blocks are shown rather than relative times on purpose. A ledger entry needs an absolute,
           verifiable position — "3 hours ago" is a presentation choice, and a block number is not.
         </p>

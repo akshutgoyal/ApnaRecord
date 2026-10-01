@@ -323,7 +323,7 @@ export default function AdminDashboard() {
                 </li>
               ))}
             </ul>
-            <p className="mt-3 text-[11px] leading-relaxed text-slate-600">
+            <p className="mt-3 text-[13px] leading-relaxed text-slate-600">
               "Open" means no later mint exists for the same patient and record type. The contract
               cannot tell you more than that — <span className="mono">RecordMinted</span> does not
               echo the request it answers, so this is a sound inference rather than a stored fact.
@@ -334,7 +334,7 @@ export default function AdminDashboard() {
             title="Requested, not yet issued"
             subtitle="Nothing is waiting on you right now."
           >
-            <p className="text-[11px] leading-relaxed text-slate-500">
+            <p className="text-[13px] leading-relaxed text-slate-500">
               {totals.requests > 0
                 ? `All ${totals.requests} request${totals.requests === 1 ? '' : 's'} made on this contract now have a matching record.`
                 : 'No clinician has requested a record on this contract yet. Requests appear here as soon as one is made.'}
@@ -357,7 +357,7 @@ export default function AdminDashboard() {
             title="Consent window health"
             subtitle="Active against every window ever granted"
             footer={
-              <p className="text-[11px] leading-relaxed text-slate-500">
+              <p className="text-[13px] leading-relaxed text-slate-500">
                 Windows close on their own — the contract enforces expiry with no intervention needed.
               </p>
             }
@@ -430,7 +430,7 @@ export default function AdminDashboard() {
                   →
                 </span>
               </div>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">{action.detail}</p>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-slate-500">{action.detail}</p>
               <p className="mono mt-2 text-[9px] text-slate-400">requires {action.gate}</p>
             </Link>
           ))}
@@ -776,7 +776,7 @@ function RecordDetail({ row, consents, onOpen, canRead }) {
           claiming it. */}
       <div className="rounded-lg border border-warn-200 bg-warn-50 p-3.5">
         <p className="text-xs font-semibold text-warn-700">Minting is not reading</p>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+        <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
           This wallet administers the contract, but administration is not consent. Unless the patient
           has granted this exact address a window, the contract will refuse the read — try it.
         </p>

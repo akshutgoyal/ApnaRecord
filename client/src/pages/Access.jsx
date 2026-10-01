@@ -41,7 +41,7 @@ function DemoPicker({ open, onToggle, busy, onPick }) {
 
       {open && (
         <div className="mt-3 space-y-2 text-left">
-          <p className="text-[11px] leading-relaxed text-slate-500">
+          <p className="text-[13px] leading-relaxed text-slate-500">
             Pick a persona. You will see that role's live dashboard — real chain data for the
             account it belongs to. Reads and charts work; anything that writes refuses, because
             there is no wallet to sign with.
@@ -203,7 +203,7 @@ export default function Access() {
                 I already have a recovery code
               </Link>
 
-              <p className="text-[11px] leading-relaxed text-slate-500">
+              <p className="text-[13px] leading-relaxed text-slate-500">
                 Creating an account makes a wallet for you in the background — no extension, no
                 seed phrase, no test ETH to find. You get a recovery code on paper, and nothing
                 else about the wallet ever needs your attention.
@@ -230,7 +230,7 @@ export default function Access() {
                       'Connect an existing wallet'
                     )}
                   </button>
-                  <p className="text-[11px] leading-relaxed text-slate-500">
+                  <p className="text-[13px] leading-relaxed text-slate-500">
                     {hasWallet()
                       ? 'This asks your extension to reveal your address — nothing is signed and nothing moves.'
                       : 'No extension was detected in this browser, so this will not do anything yet.'}
@@ -341,9 +341,9 @@ export default function Access() {
                     </button>
                   </div>
                   {topUpNote && (
-                    <p className="text-[11px] leading-relaxed text-slate-500">{topUpNote}</p>
+                    <p className="text-[13px] leading-relaxed text-slate-500">{topUpNote}</p>
                   )}
-                  <p className="text-[11px] leading-relaxed text-slate-500">
+                  <p className="text-[13px] leading-relaxed text-slate-500">
                     Writes cost a little gas, and this wallet was given a float when it was created.
                     It also tops itself up automatically when it runs low — this button is for when
                     you would rather do it deliberately.

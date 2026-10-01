@@ -349,7 +349,7 @@ export default function AuditorDashboard() {
               );
             })}
           </div>
-          <p className="mt-2.5 text-[11px] leading-relaxed text-slate-500">
+          <p className="mt-2.5 text-[13px] leading-relaxed text-slate-500">
             Grey events have simply not happened yet on this contract. Their absence is not a defect —
             <span className="mono"> AccessRevoked</span> only exists once someone revokes.
           </p>
@@ -584,7 +584,7 @@ export default function AuditorDashboard() {
             >
               {exporting === drawer?.tokenId ? 'Assembling…' : 'Export the audit packet'}
             </button>
-            <p className="text-[11px] leading-relaxed text-slate-500">
+            <p className="text-[13px] leading-relaxed text-slate-500">
               Metadata, consent history and the full event trail for this token.
             </p>
           </div>
@@ -649,7 +649,7 @@ export default function AuditorDashboard() {
               <p className="text-xs font-semibold text-error-700">
                 This role cannot read the record
               </p>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+              <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
                 AUDITOR_ROLE grants metadata and the event log. It grants no access to content — the
                 contract refuses, the same as it would for any other wallet the patient has not
                 consented to.

@@ -12,6 +12,9 @@ const TONE = {
   info: { wrap: 'border-line', bar: 'bg-peacock-600', title: 'text-ink', icon: '◈' },
   warn: { wrap: 'border-warn-200', bar: 'bg-warn-500', title: 'text-warn-700', icon: '!' },
   accent: { wrap: 'border-marigold-200', bar: 'bg-marigold-400', title: 'text-marigold-700', icon: '◔' },
+  // A settled on-chain outcome. Distinct from `ok` because it stays on screen until
+  // dismissed, and because it is the one the user is meant to keep.
+  chain: { wrap: 'border-peacock-300', bar: 'bg-peacock-600', title: 'text-peacock-700', icon: '◈' },
 };
 
 export function ToastProvider({ children }) {
@@ -25,9 +28,25 @@ export function ToastProvider({ children }) {
     (toast) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const tone = toast.tone || 'info';
-      const ttl = toast.ttl ?? (tone === 'error' || tone === 'warn' ? 5200 : 3000);
+      // A write outcome does not expire on a timer.
+      //
+      // It used to: 3s for success. The audit of the eight largest US EHR patient
+      // portals found the worst failure mode there was silent failure — a failed
+      // upload that "routinely results in the practice never receiving the document
+      // at all, because the silent failure mode produces no error and no record." For
+      // this product it is worse: the on-chain anchor is the only proof the record
+      // exists, so a user who looks away from a 3-second toast has no way to learn
+      // the mint succeeded. `ttl: Infinity` keeps it up until it is dismissed, which
+      // is also what a screen reader needs — a polite live region that empties itself
+      // is announced and then gone.
+      //
+      // Non-blocking toasts (someone tapping through a demo) can still ask for a
+      // timer by passing an explicit `ttl`, so this is a default rather than a ban.
+      const ttl = toast.ttl ?? (tone === 'chain' || tone === 'error' || tone === 'warn' ? Infinity : 9000);
       setToasts((current) => [...current.slice(-3), { id, tone, ...toast }]);
-      setTimeout(() => dismiss(id), ttl);
+      if (Number.isFinite(ttl)) {
+        setTimeout(() => dismiss(id), ttl);
+      }
       return id;
     },
     [dismiss]
@@ -37,6 +56,9 @@ export function ToastProvider({ children }) {
     () => ({
       push,
       dismiss,
+      // Chain outcomes get their own tone so the permanence is a property of the
+      // category rather than a length someone has to remember to pass.
+      chain: (title, detail) => push({ tone: 'chain', title, detail }),
       ok: (title, detail) => push({ tone: 'ok', title, detail }),
       error: (title, detail) => push({ tone: 'error', title, detail }),
       info: (title, detail) => push({ tone: 'info', title, detail }),

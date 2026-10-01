@@ -93,7 +93,7 @@ export default function PatientChart({ patient, stats, profile, viewer, nameFor,
           )}
         </div>
         <p className="mono mt-1.5 break-all text-slate-600">{patient.address}</p>
-        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+        <p className="mt-2 text-[13px] leading-relaxed text-slate-500">
           On-chain label: <span className="font-medium">{patient.label || 'none'}</span>. The contract
           knows this wallet by its address and that label — never by a name.
         </p>
@@ -108,7 +108,7 @@ export default function PatientChart({ patient, stats, profile, viewer, nameFor,
         </div>
 
         {publishedCount === 0 ? (
-          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+          <p className="mt-2 text-[13px] leading-relaxed text-slate-500">
             This patient has not published a clinical summary. That is their choice and it is
             deliberate: these fields live off-chain so they can be corrected or erased, which means
             they are never guaranteed to be present.
@@ -132,7 +132,7 @@ export default function PatientChart({ patient, stats, profile, viewer, nameFor,
           </dl>
         )}
 
-        <p className="mt-3 border-t border-line pt-2.5 text-[11px] leading-relaxed text-slate-500">
+        <p className="mt-3 border-t border-line pt-2.5 text-[13px] leading-relaxed text-slate-500">
           Self-reported and therefore context, not evidence. Nothing here is anchored on-chain or
           signed by a clinician. The digest on each report below is the only thing in this panel that
           is cryptographically backed.
@@ -302,7 +302,7 @@ export default function PatientChart({ patient, stats, profile, viewer, nameFor,
               </li>
             ))}
           </ul>
-          <p className="mt-2.5 text-[11px] leading-relaxed text-slate-500">
+          <p className="mt-2.5 text-[13px] leading-relaxed text-slate-500">
             The contract records a request as an event and stores no status, so whether one has been
             answered is derived by matching the request against later mints for the same patient and
             record type. It is a sound reading, not a chain-level fact.

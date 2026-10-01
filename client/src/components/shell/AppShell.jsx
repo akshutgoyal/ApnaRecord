@@ -186,7 +186,7 @@ export default function AppShell({ children }) {
               >
                 {CONTRACT_ADDRESS}
               </a>
-              <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+              <p className="mt-2 text-[12px] leading-relaxed text-slate-500">
                 Sepolia · reads via the server. Every write is signed in your wallet.
               </p>
             </div>
@@ -226,7 +226,7 @@ export default function AppShell({ children }) {
             </Link>
             {!collapsed && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5 px-0.5">
-                <span className="inline-flex items-center gap-1.5 rounded-institutional bg-peacock-50 px-2 py-0.5 text-[10px] font-semibold text-peacock-800 ring-1 ring-inset ring-peacock-200">
+                <span className="inline-flex items-center gap-1.5 rounded-institutional bg-peacock-50 px-2 py-0.5 text-[12px] font-semibold text-peacock-800 ring-1 ring-inset ring-peacock-200">
                   {primaryRole ? ROLES[primaryRole].label : 'No role'}
                   {heldRoles.length > 1 && ` +${heldRoles.length - 1}`}
                 </span>

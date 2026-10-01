@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 // Visual primitives shared by every dashboard. Kept dumb and presentational so a
 // dashboard file reads as layout, not as styling.
@@ -53,9 +53,14 @@ export function StatCard({
     >
       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
       <div className="mt-1.5 flex items-baseline gap-2">
+        {/* A stale number stays READABLE and gets flagged. It used to grey to
+            slate-400, which measured 2.51:1 on paper — so the failure mode was that
+            the number became unreadable in addition to being untrustworthy. The
+            product's claim is honesty about state, and greying the figure into
+            illegibility is not honesty, it is just hiding it. */}
         <span
           className={`font-display text-[28px] font-bold leading-none tabular-nums ${
-            stale ? 'text-slate-400' : 'text-ink'
+            stale ? 'text-slate-500 line-through decoration-1 decoration-slate-400' : 'text-ink'
           }`}
         >
           {value}
@@ -70,7 +75,7 @@ export function StatCard({
           </span>
         )}
       </div>
-      {hint && <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{hint}</p>}
+      {hint && <p className="mt-2 text-[13px] leading-relaxed text-slate-500">{hint}</p>}
     </Tag>
   );
 }
@@ -81,7 +86,7 @@ export function ChartCard({ title, subtitle, right, children, className = '', he
       <header className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-ink">{title}</h3>
-          {subtitle && <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">{subtitle}</p>}
+          {subtitle && <p className="mt-0.5 text-[13px] leading-relaxed text-slate-500">{subtitle}</p>}
         </div>
         {right}
       </header>
@@ -172,6 +177,8 @@ export function DataTable({
   showDensity = true,
 }) {
   const [density, setDensity] = useState('comfortable');
+  const [cursor, setCursor] = useState(null);
+  const bodyRef = useRef(null);
   const cellY = density === 'compact' ? 'py-2' : 'py-2.5';
 
   const hasToolbar = Boolean(toolbar) || showDensity;
@@ -184,6 +191,59 @@ export function DataTable({
 
   const rangeStart = paged ? (page - 1) * pageSize + 1 : 1;
   const rangeEnd = paged ? rangeStart + count - 1 : count;
+
+  // ------------------------------------------------------- grid keyboard model
+  //
+  // The APG grid pattern: one tab stop for the whole table, then arrows to move
+  // within it. Without this, a ten-row table is ten tab stops before the reader
+  // reaches the controls after it — and the audit of the eight largest US EHR
+  // patient portals found median screen-reader task completion at 54%, with
+  // navigation of dense data the dominant cost.
+  //
+  // Roving tabindex rather than aria-activedescendant, because the latter requires
+  // managing focus yourself and breaks the moment a node is removed or re-rendered
+  // mid-interaction — which a table that re-sorts while you are in it does.
+  //
+  // Only cells, not the rows: the same audit found plain table structure to be the
+  // highest-scoring performer (75% on "view a lab result"), so this is added to a
+  // real <table> rather than replacing it with role="grid".
+  const cellId = (rowIndex, columnIndex) => `cell-${rowIndex}-${columnIndex}`;
+  const activeIndex = cursor && cursor.row < count ? cursor : { row: 0, column: 0 };
+
+  // Reset when the row set changes underneath the cursor, or a stale row index
+  // leaves focus pointing at nothing.
+  useEffect(() => {
+    if (cursor && cursor.row >= count) setCursor({ row: 0, column: 0 });
+  }, [count, cursor]);
+
+  const focusCell = (rowIndex, columnIndex) => {
+    const target = bodyRef.current?.querySelector(`#${cellId(rowIndex, columnIndex)}`);
+    if (target) target.focus();
+  };
+
+  const onGridKeyDown = (event) => {
+    const { key, shiftKey } = event;
+    const maxRow = count - 1;
+    const maxColumn = columns.length - 1;
+    const at = activeIndex;
+    let next = null;
+
+    switch (key) {
+      case 'ArrowRight': next = { row: at.row, column: Math.min(at.column + 1, maxColumn) }; break;
+      case 'ArrowLeft': next = { row: at.row, column: Math.max(at.column - 1, 0) }; break;
+      case 'ArrowDown': next = { row: Math.min(at.row + 1, maxRow), column: at.column }; break;
+      case 'ArrowUp': next = { row: Math.max(at.row - 1, 0), column: at.column }; break;
+      case 'Home': next = shiftKey ? { row: 0, column: 0 } : { row: at.row, column: 0 }; break;
+      case 'End': next = shiftKey ? { row: maxRow, column: maxColumn } : { row: at.row, column: maxColumn }; break;
+      case 'PageDown': next = { row: Math.min(at.row + pageSize, maxRow), column: at.column }; break;
+      case 'PageUp': next = { row: Math.max(at.row - pageSize, 0), column: at.column }; break;
+      default: return;
+    }
+
+    event.preventDefault();
+    setCursor(next);
+    focusCell(next.row, next.column);
+  };
 
   return (
     <div>
@@ -295,24 +355,36 @@ export function DataTable({
                 })}
               </tr>
             </thead>
-            <tbody>
+            <tbody
+              ref={bodyRef}
+              onKeyDown={onRowClick ? onGridKeyDown : undefined}
+              aria-label={paged ? `Table. Showing ${rangeStart} to ${rangeEnd} of ${totalCount}.` : undefined}
+            >
               {rows.map((row, index) => {
                 const key = rowKey ? rowKey(row, index) : index;
                 const isSelected = selection ? selection.has(key) : false;
+                // Only the cursor cell is in the tab sequence. Everything else is
+                // reachable by arrow key, which is the entire point — ten rows is
+                // one tab stop instead of ten.
+                const cursorHere = activeIndex.row === index;
                 return (
                   <tr
                     key={key}
                     onClick={onRowClick ? () => onRowClick(row) : undefined}
-                    tabIndex={onRowClick ? 0 : undefined}
+                    // The row is NOT focusable. Focus lives on the cell, so Enter on a
+                    // cell opens that row and arrows move between cells of the same row.
                     onKeyDown={
                       onRowClick
                         ? (event) => {
-                            if (event.key === 'Enter') onRowClick(row);
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              onRowClick(row);
+                            }
                           }
                         : undefined
                     }
                     className={`border-b border-line last:border-0 transition-colors ${
-                      onRowClick ? 'cursor-pointer focus-visible:bg-peacock-50/60' : ''
+                      onRowClick ? 'cursor-pointer focus-within:bg-peacock-50/60' : ''
                     } ${isSelected ? 'bg-peacock-50/60' : 'hover:bg-slate-50/70'}`}
                   >
                     {selection && (
@@ -322,14 +394,19 @@ export function DataTable({
                           aria-label="Select row"
                           checked={isSelected}
                           onChange={() => onToggleRow?.(key)}
-                          className="h-3.5 w-3.5 rounded border-line-strong text-peacock-600 focus:ring-peacock-500/30"
+                          className="h-3.5 w-3.5 rounded border-line-strong text-peacock-600"
                         />
                       </td>
                     )}
                     {columns.map((column, columnIndex) => (
                       <td
                         key={column.key}
-                        className={`px-3 align-middle text-xs text-slate-700 ${cellY} ${
+                        id={cellId(index, columnIndex)}
+                        // Roving tabindex. -1 everywhere except the cursor cell.
+                        tabIndex={onRowClick && cursorHere && activeIndex.column === columnIndex ? 0 : -1}
+                        onFocus={() => setCursor({ row: index, column: columnIndex })}
+                        onClick={onRowClick ? () => onRowClick(row) : undefined}
+                        className={`px-3 align-middle text-xs text-slate-700 ${cellY} focus:outline-none focus-visible:ring-[3px] focus-visible:ring-peacock-700/70 focus-visible:ring-inset ${
                           column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
                         } ${column.mono ? 'font-mono text-[11px]' : ''} ${
                           freezeFirstColumn && columnIndex === 0

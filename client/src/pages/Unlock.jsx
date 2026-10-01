@@ -375,7 +375,7 @@ export default function Unlock() {
                   value={recoveryCode}
                   onChange={(event) => setRecoveryCode(event.target.value)}
                 />
-                <span className="mt-1 block text-[11px] leading-relaxed text-slate-500">
+                <span className="mt-1 block text-[13px] leading-relaxed text-slate-500">
                   Case does not matter, and <span className="mono">O</span> is read as{' '}
                   <span className="mono">0</span>.
                 </span>

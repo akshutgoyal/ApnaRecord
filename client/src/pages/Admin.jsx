@@ -452,7 +452,7 @@ export default function Admin() {
                 )}
               </button>
 
-              <p className="text-[11px] leading-relaxed text-slate-500">
+              <p className="text-[13px] leading-relaxed text-slate-500">
                 Three steps, in this order: encrypt here, store the ciphertext, then put the digest
                 on-chain. The contract refuses the third step for any wallet without
                 DEFAULT_ADMIN_ROLE.

@@ -49,6 +49,31 @@ const TOOLTIP_STYLE = {
   labelStyle: { color: '#5E574C', fontSize: 11, fontWeight: 600 },
 };
 
+/**
+ * A chart's data, in words.
+ *
+ * The audit of the eight largest US EHR patient portals named the absence of this as an
+ * explicit lab-results failure: "trend-graph widgets that present visual-only
+ * information with no equivalent text alternative." A screen reader on a donut is
+ * silence — the chart exists, and it says nothing.
+ *
+ * Rendered visually hidden rather than not at all, so it costs no layout and never
+ * shows twice. `focusable="false"` keeps older screen readers from landing on it.
+ */
+export function ChartDataSummary({ title, data, total }) {
+  if (!data?.length) return null;
+  const sum = total ?? data.reduce((acc, entry) => acc + (Number(entry.value) || 0), 0);
+  const parts = data
+    .map((entry) => `${entry.name}: ${entry.value}`)
+    .join(', ');
+  return (
+    <p className="sr-only">
+      {title ? `${title}. ` : ''}
+      Total {sum}. {parts}.
+    </p>
+  );
+}
+
 /** Donut with a centre total — the workhorse for "how is this split". */
 export function DonutChart({ data, centerLabel, centerValue, colors = CHART_COLORS }) {
   const total = data.reduce((sum, entry) => sum + entry.value, 0);
@@ -58,6 +83,7 @@ export function DonutChart({ data, centerLabel, centerValue, colors = CHART_COLO
   // arbitrary children.
   return (
     <div className="relative h-full w-full">
+      <ChartDataSummary title={centerLabel} data={data} total={total} />
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
           <Pie
@@ -93,38 +119,44 @@ export function BarsChart({ data, color = PRIMARY, horizontal = false, colors = 
   if (!data || data.length === 0) return <NoData />;
   if (horizontal) {
     return (
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
-          <CartesianGrid horizontal={false} stroke={GRID} />
-          <XAxis type="number" {...AXIS} allowDecimals={false} />
-          <YAxis type="category" dataKey="name" width={110} {...AXIS} />
-          <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(12,36,49,0.03)' }} />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={22}>
-            {data.map((entry, index) => (
-              <Cell key={entry.name} fill={entry.fill || colors[index % colors.length]} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+      <>
+        <ChartDataSummary data={data} />
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+            <CartesianGrid horizontal={false} stroke={GRID} />
+            <XAxis type="number" {...AXIS} allowDecimals={false} />
+            <YAxis type="category" dataKey="name" width={110} {...AXIS} />
+            <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(12,36,49,0.03)' }} />
+            <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {data.map((entry, index) => (
+                <Cell key={entry.name} fill={entry.fill || colors[index % colors.length]} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </>
     );
   }
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data} margin={{ left: -18, right: 8, top: 4, bottom: 4 }}>
-        <CartesianGrid vertical={false} stroke={GRID} />
-        <XAxis
-          dataKey="name"
-          {...AXIS}
-          interval={0}
-          angle={data.length > 4 ? -18 : 0}
-          height={data.length > 4 ? 46 : 24}
-          textAnchor={data.length > 4 ? 'end' : 'middle'}
-        />
-        <YAxis {...AXIS} allowDecimals={false} />
-        <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(12,36,49,0.03)' }} />
-        <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={44} />
-      </BarChart>
-    </ResponsiveContainer>
+    <>
+      <ChartDataSummary data={data} />
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ left: -18, right: 8, top: 4, bottom: 4 }}>
+          <CartesianGrid vertical={false} stroke={GRID} />
+          <XAxis
+            dataKey="name"
+            {...AXIS}
+            interval={0}
+            angle={data.length > 4 ? -18 : 0}
+            height={data.length > 4 ? 46 : 24}
+            textAnchor={data.length > 4 ? 'end' : 'middle'}
+          />
+          <YAxis {...AXIS} allowDecimals={false} />
+          <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(12,36,49,0.03)' }} />
+          <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={44} />
+        </BarChart>
+      </ResponsiveContainer>
+    </>
   );
 }
 
@@ -142,29 +174,44 @@ export function AreaTrend({ data, color = PRIMARY, label = 'events' }) {
     return <BarsChart data={data.map((entry) => ({ name: entry.date, value: entry.value }))} color={color} />;
   }
 
+  // A trend's meaning is where it went, not just the shape. The summary states the
+  // endpoints and the peak, which is the sentence a screen reader needs and the
+  // slope cannot say. `data` is oldest-first from the backend.
+  const first = data[0];
+  const last = data[data.length - 1];
+  const peak = data.reduce((best, entry) => (entry.value > best.value ? entry : best), data[0]);
+  const direction = last.value > first.value ? 'rising' : last.value < first.value ? 'falling' : 'flat';
+
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data} margin={{ left: -18, right: 8, top: 6, bottom: 4 }}>
-        <defs>
-          <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.28} />
-            <stop offset="100%" stopColor={color} stopOpacity={0.02} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid vertical={false} stroke={GRID} />
-        <XAxis dataKey="date" {...AXIS} />
-        <YAxis {...AXIS} allowDecimals={false} />
-        <Tooltip {...TOOLTIP_STYLE} />
-        <Area
-          type="monotone"
-          dataKey="value"
-          name={label}
-          stroke={color}
-          strokeWidth={2}
-          fill={`url(#grad-${label})`}
-        />
-      </AreaChart>
-    </ResponsiveContainer>
+    <>
+      <p className="sr-only">
+        {label} over time, from {first.date} to {last.date}. {direction.charAt(0).toUpperCase() +
+          direction.slice(1)}{' '}
+        from {first.value} to {last.value}. Peak was {peak.value} on {peak.date}.
+      </p>
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ left: -18, right: 8, top: 6, bottom: 4 }}>
+          <defs>
+            <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.28} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} stroke={GRID} />
+          <XAxis dataKey="date" {...AXIS} />
+          <YAxis {...AXIS} allowDecimals={false} />
+          <Tooltip {...TOOLTIP_STYLE} />
+          <Area
+            type="monotone"
+            dataKey="value"
+            name={label}
+            stroke={color}
+            strokeWidth={2}
+            fill={`url(#grad-${label})`}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </>
   );
 }
 

@@ -288,10 +288,10 @@ export default function Home() {
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-parchment/35">
                   On-chain digest
                 </p>
-                <p className="mono mt-1 break-all text-[10px] leading-relaxed text-parchment/55">
+                <p className="mono mt-1 break-all text-[12px] leading-relaxed text-parchment/55">
                   0x9f2c41b7e0a3d8c5f14b6e7a2d90c3f8b1e4a7d6920c5f3b8a1e4d7c0b3f6920
                 </p>
-                <p className="mt-2 text-[11px] leading-relaxed text-parchment/45">
+                <p className="mt-2 text-[13px] leading-relaxed text-parchment/45">
                   The file itself never leaves the browser in plaintext. Only these 32 bytes are
                   anchored.
                 </p>

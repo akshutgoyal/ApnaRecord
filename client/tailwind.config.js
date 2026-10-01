@@ -105,8 +105,13 @@ export default {
           100: '#F1EADC',
           200: '#E4DAC7',
           300: '#CFC3AB',
-          400: '#A79C88',
-          500: '#7D7466',
+          // Darkened from #A79C88. The old value measured 2.51:1 on paper and 2.71:1
+          // on white — below the 3:1 floor for non-text and far below the 4.5:1 for
+          // text, yet it was carrying 55 pieces of *text*: the off-chain badge, every
+          // chart axis label, "No data yet", the stale marker. It now clears AA on all
+          // three surfaces, which is why the whole ramp moved rather than 55 call sites.
+          400: '#6F6656',
+          500: '#6A6153',
           600: '#5E574C',
           700: '#463F36',
           800: '#2E2A24',

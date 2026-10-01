@@ -592,7 +592,7 @@ export default function DoctorDashboard() {
           <div className="space-y-3">
             <div className="rounded-lg border border-line p-3">
               <p className="text-xs font-semibold text-ink">Request a record</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+              <p className="mt-1 text-[13px] leading-relaxed text-slate-500">
                 Emits <span className="mono">RecordRequested</span>. The admin decides whether to mint
                 — a clinician requesting is not a clinician minting.
               </p>
@@ -602,7 +602,7 @@ export default function DoctorDashboard() {
             </div>
             <div className="rounded-lg border border-warn-200 bg-warn-50 p-3">
               <p className="text-xs font-semibold text-ink">Emergency break-glass</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
+              <p className="mt-1 text-[13px] leading-relaxed text-slate-600">
                 Bypasses consent by design. One hour, one record, and the stated reason is permanent.
               </p>
               <Link

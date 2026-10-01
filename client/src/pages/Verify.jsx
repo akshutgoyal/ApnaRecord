@@ -283,7 +283,7 @@ export default function Verify() {
                 </dl>
 
                 {!result.authentic && result.provided !== result.onChain && (
-                  <p className="mt-3 text-[11px] leading-relaxed text-error-700">
+                  <p className="mt-3 text-[13px] leading-relaxed text-error-700">
                     The two strings differ somewhere above. That difference is the whole proof: no
                     signature to forge, no log to edit, no administrator to convince.
                   </p>

@@ -44,7 +44,7 @@ export default class PanelBoundary extends React.Component {
           </span>
           <div className="min-w-0">
             <p className="text-xs font-semibold text-error-700">{name} could not be loaded</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-error-700/85">
+            <p className="mt-1 text-[13px] leading-relaxed text-error-700/85">
               {hint || 'The rest of the page is unaffected — this is usually one failed RPC call.'}
             </p>
             <p className="mono mt-2 break-words text-[10px] text-error-700/70">
