@@ -2,7 +2,7 @@
   "contractName": "ApnaRecordAccount",
   "compiler": "0.8.37+commit.f401782d.Emscripten.clang",
   "source": "ApnaRecordAccount.sol",
-  "evmVersion": "cancun",
+  "evmVersion": "shanghai",
   "optimizerRuns": 200,
   "abi": [
     {

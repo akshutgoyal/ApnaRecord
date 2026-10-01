@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.24;
+pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
@@ -16,16 +16,39 @@ interface IERC5192 {
  * Patient-owned medical records as soulbound NFTs, with access that only the
  * record's owner can open and that the contract closes on time.
  *
- * This is the canonical source for the contract deployed on Sepolia at
- * 0x464e6963cE0D833193C83Fc8Bd081614B9344b03. The client's ABI must stay in
- * step with the function signatures below. Renaming the contract or its ERC-721
- * label does not change that ABI, so the deployed instance remains compatible.
+ * PRIVACY — WHAT IS AND IS NOT ON THIS CHAIN
+ *
+ *   Public, permanently: that a token exists, its 32-byte digest, the address
+ *   that owns it, which addresses were granted access and until when, and that
+ *   identities and facilities exist.
+ *
+ *   Never on-chain: the record type, any identity label, any facility name, the
+ *   request ledger's contents, the file, the key, the CID's meaning.
+ *
+ *   Read that as one sentence — `an unknown address holds seven tokens` — not
+ *   `Patient 101 has an MRI scan that Dr X may read until Thursday`.
+ *
+ *   Note what this contract CANNOT do: it cannot gate a read. A `view` function
+ *   checking `msg.sender` can be called by anyone, because `eth_call` lets the
+ *   caller choose `from` freely. So a "private" mapping behind a gated getter is
+ *   not private. Privacy comes from data not being here — which is why metadata
+ *   lives in the server's database and only hashes and ownership live here.
+ *   Content is safe regardless: the file is AES-GCM encrypted and the server
+ *   gates the bytes behind a signed read proof, so learning a CID achieves
+ *   nothing.
  *
  * Roles
- *   DEFAULT_ADMIN_ROLE  hospital IT  register identities, mint, revoke, grant roles
- *   MANAGER_ROLE        doctor / lab requests records, emergency break-glass
- *   AUDITOR_ROLE        auditor      metadata-only audit view, never the file
- *   (record owner)      patient      grants and revokes access to their own record
+ *   DEFAULT_ADMIN_ROLE  platform  facilities, any identity, any role, any mint
+ *   HOSPITAL_ROLE       hospital IT  its own staff, its own linked patients
+ *   MANAGER_ROLE        doctor / lab  requests records, emergency break-glass
+ *   AUDITOR_ROLE        auditor   metadata-only audit view, never the file
+ *   (record owner)      patient   grants and revokes access to their own record
+ *
+ * THE PATIENT IS AN ACCOUNT, NOT A KEY
+ *   Records are owned by the patient's account contract (ApnaRecordAccount), so
+ *   every patient reference here — linking, minting, ownership — is that account
+ *   address. The patient's signing key reaches these functions through
+ *   `account.execute(...)`, which is what makes `msg.sender` the account.
  *
  * Identity : did:ethr:<chainid>:<account>, derived from the key rather than
  *            looked up, so there is nothing to register before you can prove
@@ -45,8 +68,9 @@ interface IERC5192 {
 contract ApnaRecord is ERC721, AccessControl, ReentrancyGuard, IERC5192 {
 
     // ------------------------------------------------------------- roles
-    bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
-    bytes32 public constant AUDITOR_ROLE = keccak256("AUDITOR_ROLE");
+    bytes32 public constant HOSPITAL_ROLE = keccak256("HOSPITAL_ROLE");
+    bytes32 public constant MANAGER_ROLE  = keccak256("MANAGER_ROLE");
+    bytes32 public constant AUDITOR_ROLE  = keccak256("AUDITOR_ROLE");
 
     // ------------------------------------------------------------ errors
     error NotAuthorized();
@@ -55,33 +79,54 @@ contract ApnaRecord is ERC721, AccessControl, ReentrancyGuard, IERC5192 {
     error RecordNotFound();
     error IdentityExists();
     error IdentityNotFound();
+    error NotAFacility();
+    error PatientNotLinked();
+    error LinkNotRequested();
+    error OnlyThePatient();
 
     // ------------------------------------------------------------ events
-    event IdentityCreated(address indexed account, string label);
+    //
+    // Every one of these is world-readable for ever. Nothing clinical goes in.
+    // Compare with the shape of the previous deployment, where `RecordMinted`
+    // carried the record type and `EmergencyAccessUsed` carried a clinician's
+    // free-text reason — an unbounded channel for clinical detail onto a
+    // permanent public log.
+
+    event IdentityCreated(address indexed account, address indexed facility);
     event IdentityDeactivated(address indexed account);
 
-    event RecordRequested(uint256 indexed requestId, address indexed requester,
-                          address indexed patient, string recordType);
-    event RecordMinted(uint256 indexed tokenId, address indexed patient,
-                       bytes32 recordHash, string recordType);
+    event FacilityCreated(address indexed it);
+
+    event PatientLinkRequested(address indexed facility, address indexed patient);
+    event PatientLinked(address indexed facility, address indexed patient);
+    event PatientUnlinked(address indexed facility, address indexed patient);
+
+    /// @dev The request's patient and record type are deliberately absent; they
+    ///      live in the server's database. This anchors only that a request was
+    ///      made and by whom.
+    event RecordRequested(uint256 indexed requestId, address indexed requester);
+
+    /// @dev The patient address is absent (ownership is public via ownerOf and
+    ///      carries no more), and so is the record type.
+    event RecordMinted(uint256 indexed tokenId, bytes32 recordHash);
     event RecordRevoked(uint256 indexed tokenId, address indexed admin);
 
     event AccessGranted(uint256 indexed tokenId, address indexed viewer, uint64 expiresAt);
     event AccessRevoked(uint256 indexed tokenId, address indexed viewer);
-    event EmergencyAccessUsed(uint256 indexed tokenId, address indexed viewer,
-                              string reason, uint64 expiresAt);
+
+    /// @dev The reason is gone. It was free text written by a clinician.
+    event EmergencyAccessUsed(uint256 indexed tokenId, address indexed viewer, uint64 expiresAt);
 
     // ------------------------------------------------------------- types
     struct Identity {
-        string label;        // a role title, never personal data
-        uint64 createdAt;
-        bool   active;
+        uint64  createdAt;
+        bool    active;
+        address facility;    // address(0) for platform-level identities
     }
 
     struct Record {
         bytes32 recordHash;  // keccak256 of the encrypted file held off-chain
         string  cid;         // released only through viewRecord
-        string  recordType;  // e.g. "MRI_SCAN"
         uint64  mintedAt;
     }
 
@@ -90,25 +135,63 @@ contract ApnaRecord is ERC721, AccessControl, ReentrancyGuard, IERC5192 {
     uint256 public nextRequestId = 1;
 
     mapping(address => Identity) public identities;
-    mapping(uint256 => Record)   private records;
-    // consent[tokenId][viewer] = expiry timestamp (0 means no access)
-    mapping(uint256 => mapping(address => uint64)) public consent;
+
+    /// @notice A facility IS its Hospital IT wallet. Registering the wallet
+    ///         registers the hospital; the name lives off-chain.
+    mapping(address => bool) public facilities;
+
+    /// @notice facility => patient => currently linked.
+    ///         This is the whole read scope for a hospital, and clearing it is
+    ///         what discharge does — one flag, and every record that patient
+    ///         holds becomes invisible to that hospital at once, including ones
+    ///         the hospital minted itself.
+    mapping(address => mapping(address => bool)) public facilityPatient;
+
+    /// @notice facility => patient => asked, not yet consented.
+    mapping(address => mapping(address => bool)) public pendingLink;
+
+    mapping(uint256 => Record) private records;
+
+    /// @dev Private on purpose. A public mapping would let anyone enumerate the
+    ///      accepted consent graph in bulk. `canAccess` remains the only route,
+    ///      and the grant/revoke events still describe individual edges.
+    mapping(uint256 => mapping(address => uint64)) private consent;
+
+    // per-facility enumeration, 1-based so 0 means "absent"
+    mapping(address => address[]) private _linkedPatients;
+    mapping(address => mapping(address => uint256)) private _linkedIndex;
 
     constructor() ERC721("ApnaRecord Record", "APR") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
-    // ---------------------------------------------------------- identity
-    /// @notice Register an identity. The DID is derived from the key as
-    ///         did:ethr:<chainid>:<account>, so no registry is needed to
-    ///         resolve it — this call exists to make the act auditable.
-    function createIdentity(address account, string calldata label)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
+    // ----------------------------------------------------------- facility
+    /// @notice Register a hospital. The wallet becomes the facility identifier,
+    ///         and the platform grants it HOSPITAL_ROLE separately.
+    function createFacility(address it) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (it == address(0)) revert NotAFacility();
+        facilities[it] = true;
+        emit FacilityCreated(it);
+    }
+
+    // ----------------------------------------------------------- identity
+    /// @notice Register an identity.
+    ///         The platform may place anyone anywhere. A hospital may only
+    ///         register its own staff — passing its own facility, or none.
+    function createIdentity(address account, address facility) external {
         if (identities[account].active) revert IdentityExists();
-        identities[account] = Identity(label, uint64(block.timestamp), true);
-        emit IdentityCreated(account, label);
+
+        if (hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+            if (facility != address(0) && !facilities[facility]) revert NotAFacility();
+        } else if (facilities[msg.sender]) {
+            if (facility != address(0) && facility != msg.sender) revert NotAuthorized();
+            facility = msg.sender;
+        } else {
+            revert NotAuthorized();
+        }
+
+        identities[account] = Identity(uint64(block.timestamp), true, facility);
+        emit IdentityCreated(account, facility);
     }
 
     /// @notice Retire an identity. History is retained; only the status changes.
@@ -123,43 +206,138 @@ contract ApnaRecord is ERC721, AccessControl, ReentrancyGuard, IERC5192 {
         return string.concat("did:ethr:", _uintToStr(block.chainid), ":", _addrToHex(account));
     }
 
+    /// @notice Which facility an account is staff of, if any.
+    function facilityOf(address account) external view returns (address) {
+        return identities[account].facility;
+    }
+
+    // ----------------------------------------------------- patient links
+    /// @notice A hospital asks to treat a patient. This grants nothing.
+    function requestPatientLink(address patient) external onlyRole(HOSPITAL_ROLE) {
+        if (!identities[patient].active) revert IdentityNotFound();
+        pendingLink[msg.sender][patient] = true;
+        emit PatientLinkRequested(msg.sender, patient);
+    }
+
+    /// @notice The patient consents. Called BY the patient — their account, via
+    ///         its owner key — which is the whole point: a hospital cannot link
+    ///         someone unilaterally and thereby read their history.
+    function approvePatientLink(address facility) external {
+        if (!pendingLink[facility][msg.sender]) revert LinkNotRequested();
+        pendingLink[facility][msg.sender] = false;
+        facilityPatient[facility][msg.sender] = true;
+        _addLinked(facility, msg.sender);
+        emit PatientLinked(facility, msg.sender);
+    }
+
+    /// @notice The patient withdraws consent unilaterally, at any time.
+    function revokePatientLink(address facility) external {
+        if (!facilityPatient[facility][msg.sender]) revert PatientNotLinked();
+        _endLink(facility, msg.sender);
+    }
+
+    /// @notice Discharge. The patient leaves, and the hospital loses sight of
+    ///         every record that patient holds — including ones it minted. It
+    ///         keeps the public event log, which nobody can take away.
+    function dischargePatient(address patient) external onlyRole(HOSPITAL_ROLE) {
+        if (!facilityPatient[msg.sender][patient]) revert PatientNotLinked();
+        _endLink(msg.sender, patient);
+    }
+
+    function _endLink(address facility, address patient) private {
+        facilityPatient[facility][patient] = false;
+        pendingLink[facility][patient] = false;
+        _removeLinked(facility, patient);
+        emit PatientUnlinked(facility, patient);
+    }
+
+    function _addLinked(address facility, address patient) private {
+        if (_linkedIndex[facility][patient] != 0) return;
+        _linkedPatients[facility].push(patient);
+        _linkedIndex[facility][patient] = _linkedPatients[facility].length;
+    }
+
+    /// @dev Swap-and-pop. Order is not meaningful to any caller.
+    function _removeLinked(address facility, address patient) private {
+        uint256 idx = _linkedIndex[facility][patient];
+        if (idx == 0) return;
+
+        uint256 last = _linkedPatients[facility].length;
+        if (idx != last) {
+            address moved = _linkedPatients[facility][last - 1];
+            _linkedPatients[facility][idx - 1] = moved;
+            _linkedIndex[facility][moved] = idx;
+        }
+        _linkedPatients[facility].pop();
+        delete _linkedIndex[facility][patient];
+    }
+
+    /// @notice The patients a hospital currently holds. Needed because the
+    ///         contract has no enumeration of its own, and the hospital console
+    ///         has to list something.
+    function linkedPatients(address facility) external view returns (address[] memory) {
+        return _linkedPatients[facility];
+    }
+
     // ----------------------------------------------------------- manager
-    /// @notice A clinician requests that a record be issued for a patient.
-    ///         Requesting is not minting: the admin decides.
-    function requestRecord(address patient, string calldata recordType)
+    /// @notice A clinician requests that a record be issued. Requesting is not
+    ///         minting: the issuer decides.
+    ///
+    ///         Note what is NOT here. The subject of the request is not a
+    ///         parameter, because naming the patient on-chain would publish the
+    ///         doctor-to-patient edge — which is more than ownership already
+    ///         reveals, since it says who is interested in whom. The patient and
+    ///         the record type live in the server's database, and this call
+    ///         anchors only that a request was made and by whom.
+    ///
+    ///         The trade: the ledger's CONTENTS become trust-the-server, while
+    ///         the fact that a request happened stays verifiable. That is the
+    ///         intended split, not an oversight.
+    function requestRecord()
         external
         onlyRole(MANAGER_ROLE)
         returns (uint256 requestId)
     {
         requestId = nextRequestId++;
-        emit RecordRequested(requestId, msg.sender, patient, recordType);
+        emit RecordRequested(requestId, msg.sender);
     }
 
-    /// @notice Break-glass: one record, one hour, reason recorded permanently.
-    function emergencyAccess(uint256 tokenId, address viewer, string calldata reason)
+    /// @notice Break-glass: one record, one hour.
+    ///         The clinician's justification is recorded in the server's
+    ///         database rather than on a permanent public log.
+    function emergencyAccess(uint256 tokenId, address viewer)
         external
         onlyRole(MANAGER_ROLE)
     {
         if (_ownerOf(tokenId) == address(0)) revert RecordNotFound();
         uint64 expiry = uint64(block.timestamp) + 1 hours;
         consent[tokenId][viewer] = expiry;
-        emit EmergencyAccessUsed(tokenId, viewer, reason, expiry);
+        emit EmergencyAccessUsed(tokenId, viewer, expiry);
     }
 
-    // ------------------------------------------------------------- admin
-    /// @notice Only the administrator may mint. The record is allocated to a
-    ///         registered identity and is soulbound from birth.
-    function mintRecord(address patient, bytes32 recordHash,
-                        string calldata cid, string calldata recordType)
+    // ------------------------------------------------------------- issuing
+    /// @notice Issue a record to a patient. The record is soulbound from birth.
+    ///
+    ///         The platform may issue anywhere. A hospital may issue only for a
+    ///         patient who is currently linked to it — which is the ONE thing
+    ///         this contract can genuinely enforce, because it gates a write.
+    ///         Metadata scoping for reads is the server's job, since a read
+    ///         cannot be gated here at all.
+    function mintRecord(address patient, bytes32 recordHash, string calldata cid)
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
         returns (uint256 tokenId)
     {
         if (!identities[patient].active) revert IdentityNotFound();
+
+        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+            if (!facilities[msg.sender]) revert NotAFacility();
+            if (!facilityPatient[msg.sender][patient]) revert PatientNotLinked();
+        }
+
         tokenId = nextTokenId++;
-        records[tokenId] = Record(recordHash, cid, recordType, uint64(block.timestamp));
+        records[tokenId] = Record(recordHash, cid, uint64(block.timestamp));
         _safeMint(patient, tokenId);
-        emit RecordMinted(tokenId, patient, recordHash, recordType);
+        emit RecordMinted(tokenId, recordHash);
         emit Locked(tokenId);
     }
 
@@ -213,16 +391,17 @@ contract ApnaRecord is ERC721, AccessControl, ReentrancyGuard, IERC5192 {
         return records[tokenId].recordHash == fileHash;
     }
 
-    /// @notice Auditor-only metadata. Never the CID, never the file.
+    /// @notice Auditor-only metadata. Never the CID, never the file, and no
+    ///         longer the record type — that is off-chain like all the rest.
     function auditRecord(uint256 tokenId)
         external
         view
         onlyRole(AUDITOR_ROLE)
-        returns (bytes32 recordHash, string memory recordType, uint64 mintedAt, address owner)
+        returns (bytes32 recordHash, uint64 mintedAt, address owner)
     {
         if (_ownerOf(tokenId) == address(0)) revert RecordNotFound();
         Record storage r = records[tokenId];
-        return (r.recordHash, r.recordType, r.mintedAt, ownerOf(tokenId));
+        return (r.recordHash, r.mintedAt, ownerOf(tokenId));
     }
 
     // --------------------------------------------------------- soulbound

@@ -6,18 +6,32 @@
 // wrong-wallet mistake look like a broken contract.
 
 export const ABI = [
+  // facility
+  'function createFacility(address it)',
+  'function facilities(address) view returns (bool)',
+  'function facilityOf(address account) view returns (address)',
+
   // identity
-  'function createIdentity(address account, string label)',
+  'function createIdentity(address account, address facility)',
   'function deactivateIdentity(address account)',
   'function didFor(address account) view returns (string)',
-  'function identities(address) view returns (string label, uint64 createdAt, bool active)',
+  'function identities(address) view returns (uint64 createdAt, bool active, address facility)',
+
+  // patient links — the consent handshake
+  'function requestPatientLink(address patient)',
+  'function approvePatientLink(address facility)',
+  'function revokePatientLink(address facility)',
+  'function dischargePatient(address patient)',
+  'function facilityPatient(address, address) view returns (bool)',
+  'function pendingLink(address, address) view returns (bool)',
+  'function linkedPatients(address facility) view returns (address[])',
 
   // manager
-  'function requestRecord(address patient, string recordType) returns (uint256)',
-  'function emergencyAccess(uint256 tokenId, address viewer, string reason)',
+  'function requestRecord() returns (uint256)',
+  'function emergencyAccess(uint256 tokenId, address viewer)',
 
-  // admin
-  'function mintRecord(address patient, bytes32 recordHash, string cid, string recordType) returns (uint256)',
+  // issuing
+  'function mintRecord(address patient, bytes32 recordHash, string cid) returns (uint256)',
   'function revokeRecord(uint256 tokenId)',
 
   // patient / owner
@@ -28,9 +42,8 @@ export const ABI = [
   'function canAccess(uint256 tokenId, address viewer) view returns (bool)',
   'function viewRecord(uint256 tokenId) view returns (string)',
   'function verifyRecord(uint256 tokenId, bytes32 fileHash) view returns (bool)',
-  'function auditRecord(uint256 tokenId) view returns (bytes32 recordHash, string recordType, uint64 mintedAt, address owner)',
+  'function auditRecord(uint256 tokenId) view returns (bytes32 recordHash, uint64 mintedAt, address owner)',
   'function locked(uint256 tokenId) view returns (bool)',
-  'function consent(uint256, address) view returns (uint64)',
   'function nextTokenId() view returns (uint256)',
   'function nextRequestId() view returns (uint256)',
 
@@ -42,18 +55,27 @@ export const ABI = [
   // access control
   'function hasRole(bytes32 role, address account) view returns (bool)',
   'function grantRole(bytes32 role, address account)',
+  'function HOSPITAL_ROLE() view returns (bytes32)',
   'function MANAGER_ROLE() view returns (bytes32)',
   'function AUDITOR_ROLE() view returns (bytes32)',
   'function DEFAULT_ADMIN_ROLE() view returns (bytes32)',
 
-  // events
-  'event IdentityCreated(address indexed account, string label)',
-  'event RecordRequested(uint256 indexed requestId, address indexed requester, address indexed patient, string recordType)',
-  'event RecordMinted(uint256 indexed tokenId, address indexed patient, bytes32 recordHash, string recordType)',
+  // events — none of these carry clinical data any more. The record type, the
+  // identity label, the facility name and the break-glass reason all moved
+  // off-chain; the patient is omitted from RecordMinted because `ownerOf`
+  // already says it and says no more.
+  'event IdentityCreated(address indexed account, address indexed facility)',
+  'event IdentityDeactivated(address indexed account)',
+  'event FacilityCreated(address indexed it)',
+  'event PatientLinkRequested(address indexed facility, address indexed patient)',
+  'event PatientLinked(address indexed facility, address indexed patient)',
+  'event PatientUnlinked(address indexed facility, address indexed patient)',
+  'event RecordRequested(uint256 indexed requestId, address indexed requester)',
+  'event RecordMinted(uint256 indexed tokenId, bytes32 recordHash)',
   'event RecordRevoked(uint256 indexed tokenId, address indexed admin)',
   'event AccessGranted(uint256 indexed tokenId, address indexed viewer, uint64 expiresAt)',
   'event AccessRevoked(uint256 indexed tokenId, address indexed viewer)',
-  'event EmergencyAccessUsed(uint256 indexed tokenId, address indexed viewer, string reason, uint64 expiresAt)',
+  'event EmergencyAccessUsed(uint256 indexed tokenId, address indexed viewer, uint64 expiresAt)',
   'event Locked(uint256 tokenId)',
   'event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)',
 
@@ -64,6 +86,10 @@ export const ABI = [
   'error RecordNotFound()',
   'error IdentityExists()',
   'error IdentityNotFound()',
+  'error NotAFacility()',
+  'error PatientNotLinked()',
+  'error LinkNotRequested()',
+  'error OnlyThePatient()',
   'error AccessControlUnauthorizedAccount(address account, bytes32 neededRole)',
   'error ERC721NonexistentToken(uint256 tokenId)',
   'error ERC721InvalidReceiver(address receiver)',

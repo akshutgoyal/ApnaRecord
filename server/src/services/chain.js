@@ -200,9 +200,16 @@ export async function status() {
   };
 }
 
-/** Every identity ever registered, rebuilt from the IdentityCreated log. */
+/**
+ * Every identity ever registered.
+ *
+ * The log no longer carries a label — a label is a name in practice, and this
+ * chain is world-readable for ever. So this returns the chain's facts only
+ * (when, active, which facility, which roles) and the caller joins the label
+ * from the database, which is the only place it exists now.
+ */
 export async function identities() {
-  const logs = await getLogsChunked([ethers.id('IdentityCreated(address,string)')]);
+  const logs = await getLogsChunked([ethers.id('IdentityCreated(address,address)')]);
   const i = getInterface();
   const seen = new Map();
   for (const log of logs) {
@@ -211,7 +218,7 @@ export async function identities() {
     const account = parsed.args[0];
     seen.set(account.toLowerCase(), {
       account,
-      label: parsed.args[1],
+      facility: parsed.args[1],
       registeredAtBlock: log.blockNumber,
       txHash: log.transactionHash,
     });
@@ -231,8 +238,10 @@ export async function identities() {
       ]);
       return {
         ...identity,
-        active: identityRecord[2],
-        onChainLabel: identityRecord[0],
+        // The struct is now (createdAt, active, facility) — the label that used
+        // to sit at index 0 is gone, so every index has shifted.
+        active: identityRecord[1],
+        createdAt: Number(identityRecord[0]),
         roles: {
           admin: admin[0],
           manager: manager[0],
@@ -249,21 +258,24 @@ export async function permissions(address) {
   const managerRole = (await call('MANAGER_ROLE'))[0];
   const auditorRole = (await call('AUDITOR_ROLE'))[0];
   const adminRole = (await call('DEFAULT_ADMIN_ROLE'))[0];
-  const [identityRecord, manager, auditor, admin, did] = await Promise.all([
+  const [identityRecord, manager, auditor, admin, did, isFacility] = await Promise.all([
     call('identities', [address]),
     call('hasRole', [managerRole, address]),
     call('hasRole', [auditorRole, address]),
     call('hasRole', [adminRole, address]),
     call('didFor', [address]),
+    call('facilities', [address]),
   ]);
   return {
     address,
     did: did[0],
     identity: {
-      label: identityRecord[0],
-      createdAt: Number(identityRecord[1]),
-      active: identityRecord[2],
+      // No label: it is not on-chain any more. The caller joins it from the database.
+      createdAt: Number(identityRecord[0]),
+      active: identityRecord[1],
+      facility: identityRecord[2],
     },
+    isFacility: isFacility[0],
     roles: {
       admin: admin[0],
       manager: manager[0],
@@ -273,12 +285,22 @@ export async function permissions(address) {
 }
 
 /**
- * Record metadata assembled from chain state alone, so it works with the
- * database switched off entirely. Token -> RecordMinted log -> owner.
+ * Record metadata.
+ *
+ * This used to be assembled from chain state alone — the whole point being that
+ * it worked with the database switched off entirely. That is no longer possible
+ * and it is worth being explicit about why: the `RecordMinted` log no longer
+ * carries the record type, because on a public chain for ever, "MRI_SCAN" next
+ * to an address is clinical information. The type lives in the database now.
+ *
+ * So this reads the chain for the facts the chain holds (existence, digest,
+ * mint block, owner, lock state) and the database for the one field that had to
+ * leave. Called with the database down, it degrades rather than fails: the
+ * digest and ownership still resolve, and `recordType` comes back empty.
  */
 export async function recordMeta(tokenId) {
   const logs = await getLogsChunked([
-    ethers.id('RecordMinted(uint256,address,bytes32,string)'),
+    ethers.id('RecordMinted(uint256,bytes32)'),
     ethers.zeroPadValue(ethers.toBeHex(BigInt(tokenId)), 32),
   ]);
   if (logs.length === 0) return null;
@@ -307,11 +329,27 @@ export async function recordMeta(tokenId) {
     /* burned tokens have no locked() answer; not worth failing the read */
   }
 
+  // The one field that left the chain. Imported lazily so this module stays
+  // usable (and testable) without a database connection.
+  let recordType = '';
+  let facility = '';
+  try {
+    const { RecordModel, isDbReady } = await import('../models/index.js');
+    if (isDbReady()) {
+      const row = await RecordModel.findOne({ tokenId: Number(tokenId) }).lean();
+      recordType = row?.recordType || '';
+      facility = row?.facility || '';
+    }
+  } catch {
+    /* metadata is a nicety; the digest and the owner are not */
+  }
+
   return {
     tokenId: Number(tokenId),
     patient,
-    recordHash: parsed.args[2],
-    recordType: parsed.args[3],
+    recordHash: parsed.args[1],
+    recordType,
+    facility,
     mintedAtBlock: logs[0].blockNumber,
     mintedTx: logs[0].transactionHash,
     locked,
@@ -328,8 +366,11 @@ export async function tokensOf(address) {
       const [owner] = await call('ownerOf', [tokenId]);
       if (owner.toLowerCase() === address.toLowerCase()) {
         const meta = await recordMeta(tokenId);
-        const [expiry] = await call('consent', [tokenId, address]);
-        if (meta) results.push({ ...meta, ownerConsentExpiry: Number(expiry) });
+        // `consent` is private now, so `canAccess` is the only way to ask — and
+        // it is the better question anyway: it accounts for expiry, where the
+        // raw mapping returned a timestamp the caller had to interpret.
+        const [canRead] = await call('canAccess', [tokenId, address]);
+        if (meta) results.push({ ...meta, ownerCanRead: canRead });
       }
     } catch {
       // burned token — skip it
@@ -384,10 +425,10 @@ export async function labelMap() {
 /**
  * Transaction hash -> the address that SENT it.
  *
- * Some events do not name their actor. `RecordMinted` records the patient the
- * record was allocated to, not the admin who minted it, so reading the event
- * alone makes it look as though the patient created their own record. The sender
- * is the only place that fact lives.
+ * Some events do not name their actor. `RecordMinted` now names nobody at all —
+ * the patient and the record type both left the event, so all it says is that a
+ * token exists with a given digest. The sender is the only place the issuer's
+ * identity lives, which makes this function load-bearing rather than a nicety.
  */
 export async function transactionSenders(txHashes) {
   const provider = getProvider();
@@ -407,8 +448,12 @@ export async function transactionSenders(txHashes) {
 export async function events(limit = 100) {
   const i = getInterface();
   const names = [
+    'FacilityCreated',
     'IdentityCreated',
     'IdentityDeactivated',
+    'PatientLinkRequested',
+    'PatientLinked',
+    'PatientUnlinked',
     'RecordRequested',
     'RecordMinted',
     'RecordRevoked',
