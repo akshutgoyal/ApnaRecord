@@ -153,6 +153,24 @@ console.log(`\nStarting the stub chain on ${CHAIN} and the server on ${API}`);
 console.log(`Database: ${DATABASE_URL}`);
 console.log(`Dripper (throwaway): ${dripper.address}`);
 
+// Drop the test database before anything starts.
+//
+// Without this a run inherits whatever the last one left behind, and the suite passes
+// until accumulated state trips an assertion. That is exactly what happened: the
+// dripper's daily cap quietly filled up across successive runs, and then every
+// enrolment's drip began being skipped — turning "is funded" red for a reason that run
+// had not caused. A suite whose result depends on how many times it has been run is not
+// telling you anything.
+//
+// Guarded to a local database, so pointing DATABASE_URL at something real cannot wipe it.
+if (/127\.0\.0\.1|localhost/.test(DATABASE_URL)) {
+  const mongoose = (await import('mongoose')).default;
+  await mongoose.connect(DATABASE_URL, { serverSelectionTimeoutMS: 8000 });
+  await mongoose.connection.dropDatabase();
+  await mongoose.disconnect();
+  console.log('Dropped the test database.');
+}
+
 start(
   'chain',
   process.execPath,

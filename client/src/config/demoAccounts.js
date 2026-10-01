@@ -17,35 +17,40 @@
 //     disagree, and the database is the one the UI shows.
 //
 // Target contract: 0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
+//
+// Hospital 101 is NOT in the list below, deliberately — the app has no hospital role yet
+// (that is Phase D, with the facility console). The address is recorded here so it is not
+// lost: 0xc089766ad7B4E2835f1955D7f7122242CdDA978C. It has been funded, and on-chain it
+// is the facility — the key that `createFacility` names and `HOSPITAL_ROLE` is granted to.
 
 export const DEMO_ACCOUNTS = [
   {
     key: 'admin',
     role: 'admin',
-    label: 'Hospital IT',
-    address: '0xcd026C498Ed36Ba54A9c42CEC6CbdFE1cFD96608',
-    note: 'Deployed the contract. Holds DEFAULT_ADMIN_ROLE — the only wallet that can mint.',
+    label: 'Platform',
+    address: '0x436625C20e1f90133c52B6C1728709B295fd82B6',
+    note: 'Deployed the current contract. Holds DEFAULT_ADMIN_ROLE — the only wallet that can mint, grant roles and create facilities.',
   },
   {
     key: 'doctor',
     role: 'doctor',
-    label: 'Cardiology',
-    address: '0x06Ef1262F7Ab61a960b075833ebf655277d823C6',
-    note: 'Holds MANAGER_ROLE. Requested the first record and was granted the first consent window.',
+    label: 'Doctor 101',
+    address: '0xF571447d95883AE1b9596bfd8a32D2713a80EA63',
+    note: 'Holds MANAGER_ROLE once granted. Requests records and reads with a patient consent window.',
   },
   {
     key: 'auditor',
     role: 'auditor',
-    label: 'Compliance',
-    address: '0xF2538724d814ef3900095f6e0fa0DFac8F9ad31d',
-    note: 'Holds AUDITOR_ROLE. Sees metadata and the event log, never a file.',
+    label: 'Auditor 101',
+    address: '0x62A4A7C6dA55aBB06012222F97318B53E784636e',
+    note: 'Holds AUDITOR_ROLE once granted. Sees metadata and the event log, never a file.',
   },
   {
     key: 'patient',
     role: 'patient',
     label: 'Patient 101',
-    address: '0xaC0b57F1bAc3964f13a1b232fB73B553F24Ec51B',
-    note: 'Owns record token #1. Grants and revokes access to their own record.',
+    address: '0x194eFBB518Eb356Edb18B7088a7F13629b241348',
+    note: 'Owns the records minted to it. Grants and revokes access to its own record.',
   },
 ];
 
