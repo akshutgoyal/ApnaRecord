@@ -2,7 +2,10 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'ethers';
 import { useChain } from '../chain';
 import { decryptRecord, fromBase64 } from '../crypto';
-import { chainEvents, releaseFile, patientLinks } from '../services/api';
+import { chainEvents, releaseFile, patientLinks, rotateRecovery } from '../services/api';
+import { rotateRecoveryMessage } from '../lib/wireMessages';
+import { generateRecoveryCode, sealPrivateKey } from '../lib/keystore';
+import { getLocalSigner } from '../lib/session';
 import { useTx } from '../hooks/useTx';
 import { DEMO_ACCOUNTS } from '../config/demoAccounts';
 import AddressInput from '../components/AddressInput';
@@ -36,6 +39,51 @@ export default function Patient() {
   const [loadingGrants, setLoadingGrants] = useState(false);
   const [grant, setGrant] = useState({ viewer: '', duration: 3600 });
   const [viewing, setViewing] = useState(null);
+
+  // Recovery-code rotation. Held here rather than in a shared hook because it is the one
+  // action on this page that touches the local key rather than the chain: it re-wraps the
+  // key with a new code and replaces the sealed copy the server holds. Nothing on chain
+  // moves, so there is nothing to refresh afterwards.
+  const [newRecoveryCode, setNewRecoveryCode] = useState('');
+  const [codeWritten, setCodeWritten] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const [rotateError, setRotateError] = useState('');
+
+  const rotate = useCallback(async () => {
+    setRotateError('');
+    const signer = getLocalSigner();
+    if (!signer) {
+      setRotateError(
+        'This wallet is locked, and rotation is signed by the key itself. Unlock it first.'
+      );
+      return;
+    }
+    if (!account) return;
+
+    setRotating(true);
+    try {
+      const code = generateRecoveryCode();
+      const sealed = await sealPrivateKey(signer.privateKey, code);
+      const timestamp = Date.now();
+      const signature = await signer.signMessage(rotateRecoveryMessage(account, timestamp));
+      await rotateRecovery(account, {
+        sealed: sealed.sealed,
+        salt: sealed.salt,
+        iterations: sealed.iterations,
+        timestamp,
+        signature,
+      });
+      // Only shown once the server has accepted it. Displaying a code the server refused
+      // would be the worst possible outcome: the user writes down a code that opens nothing.
+      setNewRecoveryCode(code);
+      setCodeWritten(false);
+    } catch (error) {
+      setRotateError(error?.message || 'Could not replace the recovery code.');
+    } finally {
+      setRotating(false);
+    }
+  }, [account]);
+
   const [links, setLinks] = useState({ linked: [], pending: [] });
 
   const tokenIds = useMemo(() => ownedRecords.map((r) => r.tokenId), [ownedRecords]);
@@ -423,6 +471,68 @@ export default function Patient() {
           </div>
         </>
       )}
+
+      <Card
+        className="mt-5"
+        title="Recovery code"
+        subtitle="The code that opens this wallet. Replacing it changes nothing on chain — same key, same account, same records."
+      >
+        {newRecoveryCode ? (
+          <>
+            <Callout tone="warn" title="Write this down now — it is shown once, and the old one is dead">
+              The previous code no longer opens this wallet. If you lose this one and the key, the
+              records still exist on chain and nobody can read them.
+            </Callout>
+            <div className="mt-3 rounded-lg border border-line bg-white p-3.5">
+              <code className="block break-all font-mono text-sm tracking-wider text-ink">
+                {newRecoveryCode}
+              </code>
+            </div>
+            <label className="mt-3 flex items-start gap-2 text-xs leading-relaxed text-slate-600">
+              <input
+                type="checkbox"
+                checked={codeWritten}
+                onChange={(event) => setCodeWritten(event.target.checked)}
+                className="mt-0.5"
+              />
+              I have written the new recovery code down and stored it somewhere safe.
+            </label>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="btn-ghost" disabled={!codeWritten} onClick={() => window.print()}>
+                Print
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setNewRecoveryCode('');
+                  setCodeWritten(false);
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs leading-relaxed text-slate-600">
+              Rotate if the code has been written somewhere it should not have been — a photo, a
+              shared note, a screenshot. From that point on the old code opens nothing.
+            </p>
+            <Callout tone="warn" title="What rotating cannot do">
+              If someone already had the old code <em>and</em> a copy of the sealed key, they have
+              the key — and the key is this account's permanent owner. Rotation bounds what happens
+              next; it cannot undo that.
+            </Callout>
+            <button type="button" onClick={rotate} disabled={rotating} className="btn-primary mt-3">
+              {rotating ? 'Replacing…' : 'Replace recovery code'}
+            </button>
+            {rotateError && (
+              <div className="mt-2 text-xs leading-relaxed text-error-700">{rotateError}</div>
+            )}
+          </>
+        )}
+      </Card>
 
       {viewing && (
         <Card
