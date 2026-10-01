@@ -381,6 +381,7 @@ export default function Admin() {
         </Card>
 
         <Card
+          className="lg:col-span-2"
           title="3 · Register a facility"
           subtitle="The hospital IT wallet becomes the facility. The name lives off-chain."
         >
