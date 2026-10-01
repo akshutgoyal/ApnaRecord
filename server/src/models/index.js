@@ -17,6 +17,10 @@ const RecordSchema = new mongoose.Schema(
     sizeBytes: { type: Number, default: 0 },
     mintedAtBlock: { type: Number, default: 0 },
     mintedTx: { type: String, default: '' },
+    // The facility that minted it, or '' when the platform admin did. Mirrors the chain,
+    // which stamps the same value from the minter — and it is the field the hospital's
+    // read scope is derived from, since the chain cannot enforce reads.
+    facility: { type: String, default: '', lowercase: true, index: true },
   },
   { timestamps: true }
 );
@@ -25,6 +29,10 @@ const IdentitySchema = new mongoose.Schema(
   {
     account: { type: String, required: true, unique: true, lowercase: true, index: true },
     label: { type: String, default: '' },
+    // Which hospital this account belongs to, as STAFF. Empty for patients and for
+    // platform-level identities — a patient visits hospitals, they do not work at one,
+    // and conflating the two would put patients in the staff roster.
+    facility: { type: String, default: '', lowercase: true, index: true },
     active: { type: Boolean, default: true },
     registeredAtBlock: { type: Number, default: 0 },
     roles: {
@@ -307,8 +315,76 @@ const DripperSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Guarded so `node --watch` reloads do not throw OverwriteModelError.
+/**
+ * A hospital, as a first-class thing.
+ *
+ * Keyed by the hospital-IT wallet, which IS the facility on-chain. The contract has no
+ * name field, deliberately: a hospital's name is organisation data and there is no reason
+ * to publish it permanently beside an address. The name lives here, joined in by the API —
+ * which is also the only layer that can enforce who sees it, since the chain cannot gate
+ * reads.
+ */
+const FacilitySchema = new mongoose.Schema(
+  {
+    it: { type: String, required: true, unique: true, lowercase: true, index: true },
+    name: { type: String, required: true },
+    active: { type: Boolean, default: true },
+    createdTx: { type: String, default: '' },
+  },
+  { timestamps: true }
+);
+
+/**
+ * Which patients a hospital is treating, and whether they agreed.
+ *
+ * The minting gate reads this: a hospital may not mint for a patient it has not linked.
+ * And it may not link one without the patient's approval — otherwise "admitted" becomes a
+ * backdoor around consent, and any hospital could read anyone by admitting them.
+ */
+const PatientLinkSchema = new mongoose.Schema(
+  {
+    facility: { type: String, required: true, lowercase: true, index: true },
+    patient: { type: String, required: true, lowercase: true, index: true },
+    state: { type: String, enum: ['requested', 'linked', 'ended'], default: 'requested' },
+    requestedAt: { type: Date, default: Date.now },
+    consentedAt: { type: Date, default: null },
+    endedAt: { type: Date, default: null },
+    txHash: { type: String, default: '' },
+  },
+  { timestamps: true }
+);
+// One row per pair, updated through request → consent → end, so a patient re-admitted to
+// the same hospital does not accumulate a row per visit.
+PatientLinkSchema.index({ facility: 1, patient: 1 }, { unique: true });
+
+/**
+ * A doctor asking for a record.
+ *
+ * Off-chain, because a request names the patient and the record type — precisely the two
+ * things that came off the chain. The chain keeps only the anchor, `RecordRequested`, so
+ * the ledger's contents are now trusted to the server. That is what metadata privacy
+ * costs, and it is better said than implied.
+ */
+const RequestSchema = new mongoose.Schema(
+  {
+    requestId: { type: Number, required: true, unique: true, index: true },
+    requester: { type: String, required: true, lowercase: true, index: true },
+    patient: { type: String, required: true, lowercase: true, index: true },
+    recordType: { type: String, default: '' },
+    facility: { type: String, default: '', lowercase: true, index: true },
+    issuedAt: { type: Date, default: Date.now },
+    fulfilledByTokenId: { type: Number, default: null },
+  },
+  { timestamps: true }
+);
+
+// Every export below is guarded with `mongoose.models.X ||` so `node --watch` reloads do
+// not throw OverwriteModelError.
 export const RecordModel = mongoose.models.Record || mongoose.model('Record', RecordSchema);
+export const FacilityModel = mongoose.models.Facility || mongoose.model('Facility', FacilitySchema);
+export const PatientLinkModel =
+  mongoose.models.PatientLink || mongoose.model('PatientLink', PatientLinkSchema);
+export const RequestModel = mongoose.models.Request || mongoose.model('Request', RequestSchema);
 export const IdentityModel = mongoose.models.Identity || mongoose.model('Identity', IdentitySchema);
 export const ChainEventModel = mongoose.models.ChainEvent || mongoose.model('ChainEvent', ChainEventSchema);
 export const ProfileModel = mongoose.models.Profile || mongoose.model('Profile', ProfileSchema);
@@ -325,6 +401,9 @@ export const DripLedgerModel =
 export const allModels = [
   RecordModel,
   IdentityModel,
+  FacilityModel,
+  PatientLinkModel,
+  RequestModel,
   ChainEventModel,
   ProfileModel,
   EnrolmentModel,
