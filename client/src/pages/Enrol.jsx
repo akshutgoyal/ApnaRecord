@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import Brand from '../components/Brand';
 import { useChain } from '../chain';
 import { createWallet, generateRecoveryCode, sealPrivateKey } from '../lib/keystore';
-import { saveSession } from '../lib/session';
+import { linkDevice, secureDeviceWithPin } from '../lib/session';
 import { enrolMessage } from '../lib/wireMessages';
 import { enrolWallet, requestEmailCode, verifyEmailCode } from '../services/api';
 
@@ -30,6 +30,10 @@ export default function Enrol() {
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const [saved, setSaved] = useState(false);
+  // Only used when the device has no passkey, so a PIN is the only way to stop the
+  // recovery code being retyped.
+  const [devicePin, setDevicePin] = useState('');
+  const [deviceState, setDeviceState] = useState(null);
 
   async function sendCode() {
     setSending(true);
@@ -117,14 +121,37 @@ export default function Enrol() {
       // 5. In, before the code is even written down. A user who closes the tab here
       //    still has a working account; they have simply lost it until they find the
       //    code, which is why the next screen is emphatic about the paper.
-      await saveSession({ address: account, privateKey });
+      //
+      // The device unlock is set up here as well: a passkey where the device has one, so
+      // the next time this browser opens the app a fingerprint is enough. Where it does
+      // not, this returns 'memory' and the next screen offers a PIN instead.
+      const device = await linkDevice({ address: account, privateKey });
       await adoptSession(account);
 
-      setResult({ address: account, owner: address, code, drip: created.drip });
+      setResult({
+        address: account,
+        owner: address,
+        code,
+        drip: created.drip,
+        device: device.method,
+      });
       setStep('code');
     } catch (problem) {
       setError(problem.message || 'Something went wrong while creating the wallet.');
       setStep('email');
+    }
+  }
+
+  async function secureDevice() {
+    setDeviceState('saving');
+    setError(null);
+    try {
+      await secureDeviceWithPin(devicePin);
+      setDeviceState('set');
+      setDevicePin('');
+    } catch (problem) {
+      setDeviceState(null);
+      setError(problem.message || 'Could not set a device PIN.');
     }
   }
 
@@ -318,6 +345,44 @@ export default function Enrol() {
           guardian who can approve a reset after a waiting period — is designed but not built yet.
           Until it is, this code is the only way in.
         </p>
+
+        {/* Where no passkey is available the device is secured with a PIN instead. On
+            this screen rather than buried in settings, because it belongs wherever the
+            user is already thinking about keys. */}
+        {result.device === 'memory' && (
+          <div className="mt-5 rounded-lg border border-line bg-slate-50 p-3.5">
+            <p className="text-sm font-semibold text-ink">Secure this device</p>
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+              This browser has no passkey available, so there is nothing to unlock with yet —
+              which means typing the code above every time you open the app. Set a PIN and it
+              will ask for that instead.
+            </p>
+            {deviceState === 'set' ? (
+              <p className="mt-3 text-xs font-medium text-success-700">
+                Done. This browser will now ask for the PIN instead of the recovery code.
+              </p>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="At least 6 digits"
+                  value={devicePin}
+                  onChange={(event) => setDevicePin(event.target.value.replace(/\D/g, ''))}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0"
+                  disabled={devicePin.length < 6 || deviceState === 'saving'}
+                  onClick={secureDevice}
+                >
+                  {deviceState === 'saving' ? 'Saving…' : 'Set PIN'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {result.drip && !result.drip.skipped && (
           <p className="mt-5 text-xs text-success-700">

@@ -31,6 +31,7 @@ import {
   sessionAddress,
   clearSession,
   restoreSession,
+  unlockSession,
 } from './lib/session';
 import { readProofHeaders } from './lib/readProof';
 import { ensureGas } from './lib/gas';
@@ -192,6 +193,13 @@ export function ChainProvider({ children }) {
   // The stored session arrives wrapped, so it cannot be read synchronously. Nothing
   // may conclude "nobody is signed in" until this flips.
   const [sessionRestored, setSessionRestored] = useState(false);
+  // A stored session that needs the device secret before it can be used.
+  //
+  // This is a third state, and the reason it is tracked explicitly is that conflating
+  // it with "nobody is signed in" is what sends a returning user to the sign-up page on
+  // a device that already holds their wallet. The address is known; the key is not.
+  const [locked, setLocked] = useState(false);
+  const [lockedAddress, setLockedAddress] = useState(null);
   // The address of a wallet created here and unlocked with a recovery code, as
   // opposed to one that arrived through an extension. Tracked as state, not just
   // read from storage, so the gate can distinguish "nothing can resolve this" from
@@ -554,9 +562,16 @@ export function ChainProvider({ children }) {
   // would bounce the user to /access while their key was about to arrive.
   useEffect(() => {
     let cancelled = false;
-    restoreSession().finally(() => {
-      if (!cancelled) setSessionRestored(true);
-    });
+    restoreSession()
+      .then((result) => {
+        if (cancelled) return;
+        const isLockedNow = result?.state === 'locked';
+        setLocked(isLockedNow);
+        setLockedAddress(isLockedNow ? result.address : null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionRestored(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -606,12 +621,32 @@ export function ChainProvider({ children }) {
   );
 
   /**
+   * Open a locked session with the device secret.
+   *
+   * This is what stops a returning user typing twenty characters every time: the wallet
+   * is already on the device, wrapped, and a fingerprint or the PIN releases it. The
+   * recovery code is still underneath for a new device or a wiped profile.
+   */
+  const unlockDevice = useCallback(
+    async ({ pin } = {}) => {
+      const result = await unlockSession({ pin });
+      setLocked(false);
+      setLockedAddress(null);
+      if (result?.state === 'unlocked') await adoptSession(result.address);
+      return result;
+    },
+    [adoptSession]
+  );
+
+  /**
    * Lock the wallet again. The key is dropped from this tab; the sealed blob on the
    * server is untouched, so the recovery code still opens it.
    */
   const endSession = useCallback(() => {
     clearSession();
     setLocalSession(null);
+    setLocked(false);
+    setLockedAddress(null);
     accountRef.current = null;
     setAccount(null);
     setRoles({ admin: false, manager: false, auditor: false });
@@ -723,6 +758,10 @@ export function ChainProvider({ children }) {
       hasLocalSession: Boolean(localSession),
       adoptSession,
       endSession,
+      // A wallet is on this device but the key is still wrapped.
+      locked,
+      lockedAddress,
+      unlockDevice,
       // contract access
       readContract,
       writeAs,
@@ -754,6 +793,10 @@ export function ChainProvider({ children }) {
       localSession,
       adoptSession,
       endSession,
+      // A wallet is on this device but the key is still wrapped.
+      locked,
+      lockedAddress,
+      unlockDevice,
       getSigner,
       readContract,
       writeAs,

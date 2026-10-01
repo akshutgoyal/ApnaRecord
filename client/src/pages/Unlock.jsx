@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Brand from '../components/Brand';
 import { useChain } from '../chain';
+import { Callout, Card, Field } from '../components/ui';
 import { looksLikeRecoveryCode, openPrivateKey } from '../lib/keystore';
-import { saveSession } from '../lib/session';
+import { linkDevice } from '../lib/session';
 import { getWalletBlob, lookupWallets, requestEmailCode, verifyEmailCode } from '../services/api';
 
 const REMEMBER_KEY = 'apnarecord-last-address';
@@ -24,8 +25,9 @@ const REMEMBER_KEY = 'apnarecord-last-address';
  * Neither path can open a wallet on its own. That is the whole design.
  */
 export default function Unlock() {
-  const { adoptSession } = useChain();
+  const { adoptSession, locked, lockedAddress, unlockDevice } = useChain();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
@@ -37,6 +39,8 @@ export default function Unlock() {
   const [recoveryCode, setRecoveryCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // Only needed on the PIN path; a passkey prompts the platform itself.
+  const [devicePin, setDevicePin] = useState('');
 
   // A returning device remembers which blob is its own.
   useEffect(() => {
@@ -52,6 +56,62 @@ export default function Unlock() {
   }, []);
 
   const codeLooksRight = looksLikeRecoveryCode(recoveryCode);
+
+  // THIS IS THE WHOLE POINT OF THE CHANGE.
+  //
+  // The wallet is already on this device, wrapped. Opening the app again should cost a
+  // fingerprint or a PIN, not twenty characters transcribed off a piece of paper — which
+  // is how a recovery code ends up in Notes and stops being a recovery code.
+  const lockedHere = Boolean(locked && lockedAddress);
+
+  async function unlockWithDevice() {
+    setBusy(true);
+    setError(null);
+    try {
+      await unlockDevice({ pin: devicePin });
+      navigate(location.state?.from || '/', { replace: true });
+    } catch (problem) {
+      setError(problem.message || 'That did not unlock this device.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (lockedHere) {
+    return (
+      <div className="mx-auto max-w-md px-5 py-16">
+        <Card title="Unlock this device">
+          <p className="text-sm leading-relaxed text-slate-600">
+            Your wallet is on this device.{' '}
+            <span className="mono">{lockedAddress.slice(0, 10)}…</span> Opening it needs the
+            fingerprint or PIN you set — not the recovery code. The code is still underneath if
+            you ever move to a new device.
+          </p>
+          <div className="mt-4 space-y-3">
+            <Field label="Device PIN" hint="Only needed if this device uses a PIN; a passkey prompts itself.">
+              <input
+                className="input"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                value={devicePin}
+                onChange={(event) => setDevicePin(event.target.value.replace(/\D/g, ''))}
+              />
+            </Field>
+            {error && <Callout tone="danger">{error}</Callout>}
+            <button type="button" className="btn-primary w-full" disabled={busy} onClick={unlockWithDevice}>
+              {busy ? 'Unlocking…' : 'Unlock'}
+            </button>
+            <Link to="/access" className="btn-secondary block w-full text-center">
+              Open a different wallet
+            </Link>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+
 
   async function sendCode() {
     setBusy(true);
@@ -130,7 +190,9 @@ export default function Unlock() {
       // The slow part, on purpose: 600k PBKDF2 iterations before the key exists.
       const privateKey = await openPrivateKey(chosen, recoveryCode);
 
-      await saveSession({ address: chosen.address, privateKey });
+      // Opening with the recovery code is also the moment to set this device up, so the
+      // code does not have to be typed again here.
+      await linkDevice({ address: chosen.address, privateKey });
       try {
         localStorage.setItem(REMEMBER_KEY, chosen.address);
       } catch {

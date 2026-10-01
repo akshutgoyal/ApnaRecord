@@ -6,6 +6,7 @@ import apiRoutes from './routes/apiRoutes.js';
 import { connectDB } from './config/db.js';
 import { warmStats } from './controllers/statsController.js';
 import { dripperStatus } from './services/dripper.js';
+import { startIndexScheduler } from './services/indexScheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -144,6 +145,11 @@ async function startServer() {
       console.warn('        Dashboards will still load, just slowly on first open.');
     }
   });
+
+  // Keep the cache current on a timer. Until now this was `npm run index`, which meant
+  // the cache refreshed only when somebody remembered — and a dashboard showing
+  // yesterday's world looks exactly like one showing today's.
+  startIndexScheduler();
 
   // Report the gas float on the banner. It decides whether anyone can create a
   // wallet at all, so it belongs somewhere visible rather than in a log someone

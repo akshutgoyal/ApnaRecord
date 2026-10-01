@@ -17,9 +17,17 @@ import { Card, Callout } from '../ui';
  * put someone into a console they are not entitled to see.
  */
 export default function RoleGate({ role, children }) {
-  const { account, primaryRole, roles, isPatient, isDemo, bootstrapped, hasWallet, hasLocalSession } =
+  const { account, primaryRole, roles, isPatient, isDemo, bootstrapped, hasWallet, hasLocalSession, locked } =
     useChain();
   const location = useLocation();
+
+  // A wallet is on this device, wrapped, waiting for the device secret. That is NOT
+  // "no wallet": sending them to /access would invite them to create a second account
+  // for records that already exist, which is exactly what happens if a locked session is
+  // treated as a signed-out one.
+  if (locked) {
+    return <Navigate to="/unlock" replace state={{ from: location.pathname }} />;
+  }
 
   // Nothing can ever resolve an address here, so a redirect is the honest answer
   // and waiting would only show a spinner that never ends.
