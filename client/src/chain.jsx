@@ -37,6 +37,35 @@ import { readProofHeaders } from './lib/readProof';
 import { ensureGas } from './lib/gas';
 
 const CONTRACT_INTERFACE = new Interface(ABI);
+
+/**
+ * Decode a contract custom error from whichever shape ethers handed us.
+ *
+ * Exported because callers other than `describeError` need to ask *which* revert this
+ * was, and a second implementation that matches on message text is how you get one that
+ * never matches: the friendly wording ("Already registered") is what we render, while the
+ * error itself carries a selector. That mistake made the admin console refuse to write a
+ * label for an identity that already existed, which is precisely the case that needs one.
+ */
+export function contractError(error) {
+  const candidates = [
+    error?.data,
+    error?.revert?.data,
+    error?.info?.error?.data,
+    error?.error?.data,
+    error?.value,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || !candidate.startsWith('0x')) continue;
+    try {
+      const parsed = CONTRACT_INTERFACE.parseError(candidate);
+      if (parsed) return parsed;
+    } catch {
+      /* not one of ours */
+    }
+  }
+  return null;
+}
 const POLL_MS = 12_000;
 
 // Demo mode: a walletless walkthrough. The persona key survives reloads within
@@ -101,23 +130,8 @@ export function describeError(error) {
     };
   }
 
-  const candidates = [
-    error.data,
-    error.revert?.data,
-    error.info?.error?.data,
-    error.error?.data,
-    error.value,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate !== 'string' || !candidate.startsWith('0x')) continue;
-    try {
-      const parsed = CONTRACT_INTERFACE.parseError(candidate);
-      if (!parsed) continue;
-      return namedError(parsed);
-    } catch {
-      /* not one of ours */
-    }
-  }
+  const decoded = contractError(error);
+  if (decoded) return namedError(decoded);
 
   return {
     title: 'Transaction failed',

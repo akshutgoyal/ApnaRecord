@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { isAddress } from 'ethers';
-import { useChain, describeError } from '../chain';
+import { useChain, describeError, contractError } from '../chain';
 import { encryptRecord, formatBytes, toBase64 } from '../crypto';
 import { chainIdentities, chainEvents, storeRecord, recordIdentity, recordFacility } from '../services/api';
 import { storeMessage, identityMessage, facilityMessage } from '../lib/wireMessages';
@@ -108,10 +108,12 @@ export default function Admin() {
           ]);
           await tx.wait();
         } catch (error) {
-          const text = [error?.shortMessage, error?.reason, error?.message, error?.info?.error?.message]
-            .filter(Boolean)
-            .join(' ');
-          if (!/IdentityExists/i.test(text)) throw error;
+          // The same decoder `describeError` uses. Matching on message text does not work
+          // here: the error carries a selector and the words "Already registered" are
+          // what we render, so a string test never sees "IdentityExists" and this rethrew
+          // — which is why the label still could not be attached after the first attempt
+          // at this fix.
+          if (contractError(error)?.name !== 'IdentityExists') throw error;
         }
         // The label lives off-chain now: the event carries no name.
         const timestamp = Date.now();
