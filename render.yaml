@@ -13,12 +13,16 @@ services:
         sync: false
       - key: MASTER_KEY
         sync: false
-      - key: SEPOLIA_RPC_URL
-        value: https://ethereum-sepolia-rpc.publicnode.com
+      - key: RPC_URL
+        value: https://sepolia.base.org
+      - key: CHAIN_ID
+        value: "84532"
+      - key: EXPLORER_BASE
+        value: https://sepolia.basescan.org/address/
       - key: CONTRACT_ADDRESS
-        value: 0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
+        sync: false
       - key: CONTRACT_DEPLOY_BLOCK
-        value: 11714309
+        sync: false
       # Uploads are wiped on every redeploy without a persistent disk. Mount one
       # at /opt/apnarecord/uploads and uncomment, or accept re-uploads.
       # - key: UPLOAD_DIR

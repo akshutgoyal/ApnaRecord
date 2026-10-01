@@ -79,9 +79,9 @@ function handle(message) {
       return true;
     }
     case 'eth_chainId':
-      return hex(11155111);
+      return hex(84532);
     case 'net_version':
-      return '11155111';
+      return '84532';
     case 'eth_blockNumber':
       return hex(1_000_000 + sent.length);
     case 'eth_getBalance':

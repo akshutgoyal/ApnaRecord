@@ -38,14 +38,14 @@ let wallet = null;
 let chain = Promise.resolve();
 
 export function dripEnabled() {
-  return Boolean(process.env.DRIPPER_PRIVATE_KEY && process.env.SEPOLIA_RPC_URL);
+  return Boolean(process.env.DRIPPER_PRIVATE_KEY && process.env.RPC_URL);
 }
 
 function getWallet() {
   if (wallet) return wallet;
-  if (!process.env.SEPOLIA_RPC_URL) throw new Error('SEPOLIA_RPC_URL is not set.');
+  if (!process.env.RPC_URL) throw new Error('RPC_URL is not set.');
   if (!process.env.DRIPPER_PRIVATE_KEY) throw new Error('DRIPPER_PRIVATE_KEY is not set.');
-  const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
+  const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   wallet = new ethers.Wallet(process.env.DRIPPER_PRIVATE_KEY, provider);
   return wallet;
 }
@@ -234,9 +234,9 @@ export async function dripperStatus() {
   if (!dripEnabled()) {
     return {
       enabled: false,
-      reason: process.env.SEPOLIA_RPC_URL
+      reason: process.env.RPC_URL
         ? 'DRIPPER_PRIVATE_KEY is not set — enrolments cannot be funded.'
-        : 'SEPOLIA_RPC_URL is not set.',
+        : 'RPC_URL is not set.',
     };
   }
   const w = getWallet();

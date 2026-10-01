@@ -59,10 +59,11 @@ const UNLOCKED_MARKER = 'apnarecord-unlocked';
 // that a record's owner cannot be identified from it — and then the transport handed
 // the join back for free, because asking for a balance reveals whose it is.
 //
-// `VITE_SEPOLIA_RPC_URL` still overrides this, deliberately: it is the escape hatch when
-// the API itself is down. It is also the way to put the leak back, so it is unset by
-// default and should stay that way.
-const RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL || `${API_URL}/rpc`;
+// `VITE_RPC_URL` still overrides this, deliberately: it is the escape hatch when the
+// API itself is down. It is also the way to put the leak back, so it is unset by
+// default and should stay that way. The variable was named VITE_SEPOLIA_RPC_URL, which
+// stopped describing anything once the deployment moved off Sepolia.
+const RPC_URL = import.meta.env.VITE_RPC_URL || `${API_URL}/rpc`;
 
 let provider = null;
 /** The unwrapped session, in memory. The only place a key exists in usable form. */

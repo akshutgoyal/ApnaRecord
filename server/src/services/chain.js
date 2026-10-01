@@ -9,9 +9,15 @@ let iface = null;
 
 export function getProvider() {
   if (!provider) {
-    const url = process.env.SEPOLIA_RPC_URL;
-    if (!url) throw new Error('SEPOLIA_RPC_URL is not set — see server/.env.example');
-    // staticNetwork avoids a chainId round-trip on every single call.
+    // Named for the chain it points at, not for a specific network. It was
+    // RPC_URL, which stopped being true the moment the deployment moved —
+    // and a variable whose name lies about its contents is how a server ends up
+    // reading one chain while the client talks to another.
+    const url = process.env.RPC_URL;
+    if (!url) throw new Error('RPC_URL is not set — see server/.env.example');
+    // staticNetwork avoids a chainId round-trip on every single call — and, more
+    // importantly, makes a chainId mismatch between the configured RPC and the
+    // deployed contract fail loudly at startup instead of silently on first read.
     provider = new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true });
   }
   return provider;
@@ -145,7 +151,7 @@ export async function getDeployBlock() {
 
   if ((await provider.getCode(address, high)) === '0x') {
     throw new Error(
-      `No contract code at ${address}. Check CONTRACT_ADDRESS and SEPOLIA_RPC_URL.`
+      `No contract code at ${address}. Check CONTRACT_ADDRESS and RPC_URL.`
     );
   }
   while (low < high) {

@@ -1,4 +1,4 @@
-// END-TO-END PROOF, AGAINST REAL SEPOLIA.
+// END-TO-END PROOF, AGAINST REAL BASE SEPOLIA.
 //
 // Deliberately NOT part of `npm test`: it spends real testnet funds, deploys a real
 // contract and leaves both behind. Run it after anything that touches enrolment, the
@@ -6,7 +6,7 @@
 // against a live chain rather than a stub.
 //
 //   NODE_ENV=development DATABASE_URL=mongodb://127.0.0.1:27017/apnarecord_proof \
-//     node tests/manual/sepolia-proof.mjs
+//     node tests/manual/base-proof.mjs
 //
 // It needs a running API whose DRIPPER_PRIVATE_KEY is funded. Each run costs the float
 // about 0.0104 ETH (the drip plus the account deployment, which the float also pays).
@@ -21,7 +21,7 @@ import { enrolMessage } from '../../client/src/lib/wireMessages.js';
 import { ABI, ACCOUNT_ABI, CONTRACT_ADDRESS, TX_EXPLORER } from '../../client/src/contract.js';
 
 const API = 'http://localhost:5000/api';
-const RPC = 'https://ethereum-sepolia-rpc.publicnode.com';
+const RPC = 'https://sepolia.base.org';
 const provider = new JsonRpcProvider(RPC);
 
 const post = async (path, body) => {
@@ -40,7 +40,7 @@ const ok = (label, condition, detail = '') => {
   if (!condition) failures += 1;
 };
 
-const email = `sepolia-proof-${Date.now()}@example.com`;
+const email = `base-proof-${Date.now()}@example.com`;
 console.log(`Proof run against ${RPC}`);
 console.log(`contract ${CONTRACT_ADDRESS}`);
 console.log(`test identity ${email}`);
@@ -90,7 +90,7 @@ ok('the account deployment broadcast', Boolean(deployTx));
 ok('the drip broadcast', Boolean(drip.txHash));
 
 // ---------------------------------------------------------------- 4. on-chain truth
-step(4, 'verify on Sepolia what the server claimed');
+step(4, 'verify on Base Sepolia what the server claimed');
 if (account) {
   let code = '0x';
   for (let i = 0; i < 20; i += 1) {
@@ -98,7 +98,7 @@ if (account) {
     if (code !== '0x') break;
     await new Promise((r) => setTimeout(r, 3000));
   }
-  ok('the account is a deployed contract on Sepolia', code !== '0x', `${(code.length - 2) / 2} bytes`);
+  ok('the account is a deployed contract on Base Sepolia', code !== '0x', `${(code.length - 2) / 2} bytes`);
 
   const vault = new Contract(account, ACCOUNT_ABI, provider);
   const owner = await vault.owner();

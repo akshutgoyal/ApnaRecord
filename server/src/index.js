@@ -122,7 +122,7 @@ async function startServer() {
     console.log(`  → chain       http://localhost:${PORT}/api/chain/status`);
     console.log('');
     console.log(`  contract      ${process.env.CONTRACT_ADDRESS || '(CONTRACT_ADDRESS not set)'}`);
-    console.log(`  rpc           ${process.env.SEPOLIA_RPC_URL || '(SEPOLIA_RPC_URL not set)'}`);
+    console.log(`  rpc           ${process.env.RPC_URL || '(RPC_URL not set)'}`);
     console.log(
       `  master key    ${process.env.MASTER_KEY ? 'set' : 'MISSING — record uploads will fail'}`
     );

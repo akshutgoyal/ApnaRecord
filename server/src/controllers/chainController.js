@@ -18,7 +18,11 @@ export async function chainStatus(req, res) {
     return res.json({
       ok: true,
       ...info,
-      explorer: `https://sepolia.etherscan.io/address/${info.contract}`,
+      // From the environment, not hardcoded. This one line was the reason a live
+      // Base Sepolia deployment still handed out sepolia.etherscan.io links — a
+      // correct transaction rendered as a dead explorer page, which reads as a
+      // broken chain rather than a stale constant.
+      explorer: `${process.env.EXPLORER_BASE || 'https://sepolia.basescan.org/address/'}${info.contract}`,
       note: 'Read-only. The server holds no signing key — every write is signed in the browser.',
     });
   } catch (error) {

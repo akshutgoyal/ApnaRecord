@@ -90,6 +90,21 @@ checkSecret(
   /^0x[0-9a-fA-F]{40}$/,
   'It must be a 20-byte address — read signatures are verified against it.'
 );
+checkSecret(
+  'RPC_URL',
+  /^https?:\/\//,
+  'It must be an http(s) endpoint. The server cannot read the chain without it.'
+);
+// Not a secret — but bound into the EIP-712 read domain, so it has to be right.
+// A mismatch with the client's VITE_CHAIN_ID makes every signed read verify against
+// a different domain and get rejected, which surfaces as "permissions are broken"
+// rather than as a configuration error. Checked at boot so it cannot reach a user.
+checkSecret(
+  'CHAIN_ID',
+  /^[0-9]+$/,
+  'It must be the numeric chain id RPC_URL points at — Base Sepolia is 84532. ' +
+    'It is bound into read signatures, so a mismatch rejects every one of them.'
+);
 
 // A wildcard CORS origin is the one setting that turns every other control into a
 // suggestion, because it lets any page on the internet call this API with the

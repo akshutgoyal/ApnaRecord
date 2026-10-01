@@ -6,7 +6,7 @@ Patient-owned medical records, verifiable by anyone, instantly.
 
 **Login is a wallet. A record is a soulbound token. Permission is a smart contract.**
 
-Live contract (Sepolia): [`0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA`](https://sepolia.etherscan.io/address/0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA) · deploy block `11820529`
+Live contract: **not yet on Base Sepolia.** The Sepolia L1 deployment (`0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA`) is superseded — deploy to Base Sepolia and put the address here and in both `.env` files.
 
 ---
 
@@ -36,7 +36,7 @@ for free, without trusting us.**
 
 | | |
 |---|---|
-| **Contract** | Solidity 0.8.24, OpenZeppelin ERC-721 + AccessControl, ERC-5192 soulbound. Deployed and live on Sepolia |
+| **Contract** | Solidity 0.8.24, OpenZeppelin ERC-721 + AccessControl, ERC-5192 soulbound. Deployed and live on Base Sepolia |
 | **Frontend** | React 18 + Vite 6 + Tailwind 3 + ethers v6 — one console per role |
 | **Backend** | Express 4 + Mongoose 8 — serves ciphertext, indexes the chain |
 | **Storage** | Encrypted blobs on disk, behind an interface that IPFS drops into |
@@ -307,7 +307,7 @@ MASTER_KEY=paste-the-generated-64-hex-here
 DATABASE_URL=          # optional — blank means "rebuild from the chain"
 ```
 
-Chain values (`SEPOLIA_RPC_URL`, `CONTRACT_ADDRESS`, `CONTRACT_DEPLOY_BLOCK`) already
+Chain values (`RPC_URL`, `CONTRACT_ADDRESS`, `CONTRACT_DEPLOY_BLOCK`) already
 point at the deployed contract — leave them unless you deploy your own.
 
 **Optional: the gas float.** This is what lets a new account act without anyone acquiring
@@ -420,9 +420,10 @@ Encryption is **browser-side only**. Nothing trusts the server with plaintext:
 PORT=5000
 DATABASE_URL=                           # chains reads work without it; accounts need it
 
-SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-CONTRACT_ADDRESS=0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
-CONTRACT_DEPLOY_BLOCK=11714309
+RPC_URL=https://sepolia.base.org
+CHAIN_ID=84532
+CONTRACT_ADDRESS=
+CONTRACT_DEPLOY_BLOCK=
 
 DRIPPER_PRIVATE_KEY=                    # npm run dripper:new — fund the address it prints
 DRIP_AMOUNT=0.01                        # per new account. ~100 writes at 2 gwei
@@ -464,16 +465,20 @@ CONTACT_RESEND_COOLDOWN_MS=30000       # minimum gap between requests for one ad
 
 ```env
 VITE_API_URL=http://localhost:5000/api
-VITE_CONTRACT_ADDRESS=0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
-VITE_CHAIN_ID=11155111
-VITE_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+VITE_CONTRACT_ADDRESS=<the address you deployed to Base Sepolia>
+VITE_CHAIN_ID=84532
+VITE_CHAIN_NAME=Base Sepolia
+VITE_EXPLORER=https://sepolia.basescan.org/address/
+VITE_TX_EXPLORER=https://sepolia.basescan.org/tx/
 ```
 
-> `VITE_SEPOLIA_RPC_URL` is what the browser talks to when there is no extension to borrow.
-> The public default is fine for development and rate-limits under load — point it at your own
-> provider before demoing, or writes will fail at the worst moment. Writes broadcast from the
-> browser, so this endpoint sees the user's IP; relaying signed transactions through our own
-> backend is the planned hardening.
+> `VITE_CHAIN_ID` must equal the server's `CHAIN_ID`. It is bound into the EIP-712 read
+> domain, so a mismatch rejects every signed read and presents as "permissions are
+> broken" rather than as a configuration error.
+>
+> Leave `VITE_RPC_URL` unset. Reads and writes go through our own backend (`/api/rpc`)
+> by default, so the upstream node never sees the user's IP. Setting it points the
+> browser straight at a public node and puts that leak back.
 
 > Vite bakes `VITE_*` values in at **build** time, so changing them means rebuilding
 > (locally: restart `npm run dev:client`).
@@ -495,7 +500,7 @@ none of this is hardcoded into the role logic.
 | Patient | Patient 101 | `0x194eFBB518Eb356Edb18B7088a7F13629b241348` |
 
 There is **no login page and no test password** — the wallet is the identity. Connect
-MetaMask to Sepolia and the correct console is offered to you. `/verify` works with no
+MetaMask to Base Sepolia and the correct console is offered to you. `/verify` works with no
 wallet at all, and **View demo** on `/access` opens every console wallet-free.
 
 ---
@@ -799,7 +804,7 @@ for a credit card).
 | Health Check Path | `/api/health` |
 
 Environment variables: `DATABASE_URL` and `MASTER_KEY` (paste your secrets), plus
-`SEPOLIA_RPC_URL`, `CONTRACT_ADDRESS`, `CONTRACT_DEPLOY_BLOCK` from `server/.env.example`.
+`RPC_URL`, `CONTRACT_ADDRESS`, `CONTRACT_DEPLOY_BLOCK` from `server/.env.example`.
 
 Two caveats on free tiers: the service **sleeps after ~15 min idle** (warm it by hitting
 `/api/health` before a demo), and the disk is **ephemeral** (uploads vanish on redeploy —
@@ -817,8 +822,8 @@ Render can reach it.
 
 ```env
 VITE_API_URL=https://<your-render-service>.onrender.com/api
-VITE_CONTRACT_ADDRESS=0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA
-VITE_CHAIN_ID=11155111
+VITE_CONTRACT_ADDRESS=
+VITE_CHAIN_ID=84532
 ```
 
 > Vite bakes `VITE_*` in at build time, so **updating an env var requires a redeploy**:

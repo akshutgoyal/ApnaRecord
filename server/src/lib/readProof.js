@@ -26,7 +26,16 @@ import { accountOwner } from '../services/account.js';
 /** How long a signed read stays valid. Short, because it is a bearer token. */
 const MAX_AGE_MS = 5 * 60 * 1000;
 
-const CHAIN_ID = Number(process.env.CHAIN_ID) || 11155111;
+/**
+ * Bound into the EIP-712 domain, so this MUST match the client's VITE_CHAIN_ID.
+ *
+ * If the two disagree, every signature the client produces hashes to a different
+ * domain and the server rejects all of them — which presents as "permissions are
+ * broken" rather than as a configuration error. That is the exact failure the
+ * CONTRACT_ADDRESS check below exists to catch, and this default is the other half
+ * of it. Base Sepolia is 84532.
+ */
+const CHAIN_ID = Number(process.env.CHAIN_ID) || 84532;
 
 export const READ_DOMAIN = () => ({
   name: 'ApnaRecord',

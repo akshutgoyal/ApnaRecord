@@ -190,7 +190,18 @@ function serverEnv(port) {
     NODE_ENV: 'test',
     PORT: String(port),
     DATABASE_URL,
-    SEPOLIA_RPC_URL: CHAIN,
+    RPC_URL: CHAIN,
+    // Must match what tests/support/mock-chain.mjs reports for eth_chainId. It is
+    // bound into the EIP-712 read domain, so a disagreement here would reject every
+    // signed read — the same failure the production server now checks for at boot.
+    CHAIN_ID: '84532',
+    // Pinned, not inherited. The contract address is read with `eth_getCode` and
+    // `eth_call`, both of which the stub chain answers for ANY address — so the
+    // suites do not care what it is. What they must not do is depend on whatever
+    // happened to be in the developer's server/.env, which is exactly what they did
+    // until a migration blanked it and thirteen assertions went red for a reason
+    // that had nothing to do with the change.
+    CONTRACT_ADDRESS: '0x0000000000000000000000000000000000000abc',
     DRIPPER_PRIVATE_KEY: dripper.privateKey,
     // The suites call the API from Node, which sends no Origin header, so the
     // allowlist does not obstruct them. Listing an origin exercises the real path.

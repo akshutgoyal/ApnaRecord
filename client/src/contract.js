@@ -121,13 +121,28 @@ export const ACCOUNT_ABI = [
 export const CONTRACT_ADDRESS =
   import.meta.env?.VITE_CONTRACT_ADDRESS || '0x0afBDd549aE57818A428Be35ee55d7f6715CD5cA';
 
-export const CHAIN_ID = Number(import.meta.env?.VITE_CHAIN_ID || 11155111);
+// ---------------------------------------------------------------- the chain
+//
+// Every chain-specific fact is read from the environment, with Base Sepolia as the
+// default. It used to be hardcoded to Sepolia, which meant moving chains touched
+// this file and four others — and the two constants that were NOT parameterised
+// (the chain name and the explorer) were the ones most likely to be forgotten,
+// leaving the UI confidently linking to the wrong block explorer.
+//
+// Set VITE_CHAIN_ID, VITE_CHAIN_NAME, VITE_EXPLORER and VITE_TX_EXPLORER together.
+// Nothing else in the client needs to know which chain this is.
+export const CHAIN_ID = Number(import.meta.env?.VITE_CHAIN_ID || 84532);
 
-export const CHAIN_NAME = 'Sepolia';
+export const CHAIN_NAME = import.meta.env?.VITE_CHAIN_NAME || 'Base Sepolia';
 
-export const EXPLORER = `https://sepolia.etherscan.io/address/${CONTRACT_ADDRESS}`;
+/** Base for address links. The contract address is appended. */
+const EXPLORER_BASE =
+  import.meta.env?.VITE_EXPLORER || 'https://sepolia.basescan.org/address/';
 
-export const TX_EXPLORER = 'https://sepolia.etherscan.io/tx/';
+/** Base for transaction links. The tx hash is appended. */
+export const TX_EXPLORER = import.meta.env?.VITE_TX_EXPLORER || 'https://sepolia.basescan.org/tx/';
+
+export const EXPLORER = `${EXPLORER_BASE}${CONTRACT_ADDRESS}`;
 
 export const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:5000/api';
 
