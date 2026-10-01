@@ -33,11 +33,20 @@ import {
   patientLinks,
 } from '../controllers/directoryController.js';
 import { requireConsent } from '../middleware/consentGate.js';
+import { rpcProxy } from '../controllers/rpcController.js';
 
 const router = Router();
 
 // Health probe — used by the host's health check.
 router.get('/health', getHealth);
+
+// --- Chain access, proxied ---
+//
+// The browser no longer talks to a public node directly. It used to, which handed that
+// node every user's IP next to the addresses they read and the transactions they sent —
+// the join the on-chain privacy work exists to avoid. A method allowlist bounds it, so
+// this is a relay for this app rather than an open node.
+router.post('/rpc', rpcProxy);
 
 // --- Identity: a verified email address ---
 //

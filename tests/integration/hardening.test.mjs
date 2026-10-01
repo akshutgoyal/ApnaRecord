@@ -186,4 +186,61 @@ group('the limiters are in the database, not in a Map');
 const health = await (await fetch(`${API}/health`)).json();
 check('the API is up and reporting', health.status === 'ok', JSON.stringify(health).slice(0, 120));
 
+group('the RPC relay');
+
+// The browser no longer talks to a public node directly — it talks to this. The
+// allowlist is the security posture, so what matters is that it REFUSES, and the
+// refusal is the part that would rot silently if nothing exercised it.
+const chainIdReply = await post('/rpc', { jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] });
+check(
+  'an allowlisted method is answered',
+  chainIdReply.status === 200 && typeof chainIdReply.body.result === 'string',
+  JSON.stringify(chainIdReply.body).slice(0, 140)
+);
+check('and the envelope is a valid JSON-RPC reply', chainIdReply.body.jsonrpc === '2.0' && chainIdReply.body.id === 1);
+
+const walletMethods = await post('/rpc', { jsonrpc: '2.0', id: 2, method: 'eth_accounts', params: [] });
+check(
+  'a wallet method is refused, so this is not a general provider',
+  walletMethods.status === 400,
+  `got ${walletMethods.status}`
+);
+check(
+  'and the refusal names the method rather than failing vaguely',
+  String(walletMethods.body.error?.message || '').includes('eth_accounts'),
+  walletMethods.body.error?.message
+);
+
+const adminMethod = await post('/rpc', { jsonrpc: '2.0', id: 3, method: 'admin_addPeer', params: [] });
+check('a node-admin method is refused', adminMethod.status === 400, `got ${adminMethod.status}`);
+
+const noMethod = await post('/rpc', { jsonrpc: '2.0', id: 4, params: [] });
+check('a call with no method is refused', noMethod.status === 400, `got ${noMethod.status}`);
+
+const batch = await post('/rpc', [
+  { jsonrpc: '2.0', id: 5, method: 'eth_chainId', params: [] },
+  { jsonrpc: '2.0', id: 6, method: 'eth_chainId', params: [] },
+]);
+check(
+  'a batch comes back as a batch, in order',
+  Array.isArray(batch.body) && batch.body.length === 2 && batch.body[0].id === 5 && batch.body[1].id === 6,
+  JSON.stringify(batch.body).slice(0, 140)
+);
+
+const poisoned = await post('/rpc', [
+  { jsonrpc: '2.0', id: 7, method: 'eth_chainId', params: [] },
+  { jsonrpc: '2.0', id: 8, method: 'eth_accounts', params: [] },
+]);
+check(
+  'one disallowed method poisons the whole batch',
+  poisoned.status === 400,
+  'otherwise a batch is a way around the allowlist'
+);
+
+const oversized = await post(
+  '/rpc',
+  Array.from({ length: 21 }, (_, i) => ({ jsonrpc: '2.0', id: i, method: 'eth_chainId', params: [] }))
+);
+check('an unbounded batch is refused rather than amplified', oversized.status === 400, `got ${oversized.status}`);
+
 report();

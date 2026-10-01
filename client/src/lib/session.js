@@ -34,6 +34,7 @@
 //     that is strictly better than what this replaced.
 
 import { JsonRpcProvider, Wallet } from 'ethers';
+import { API_URL } from '../contract.js';
 import {
   derivePinKey,
   encodeBytes,
@@ -51,10 +52,17 @@ const RECORD_ID = 'current';
 const SESSION_KEY_ID = 'session-key';
 const UNLOCKED_MARKER = 'apnarecord-unlocked';
 
-// Reads go to a public endpoint. Writes broadcast from the browser unless the relay is
-// available; see chain.jsx.
-const RPC_URL =
-  import.meta.env.VITE_SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
+// Chain access goes through this server, not a public node.
+//
+// Pointing at publicnode.com directly meant that node saw every user's IP sitting
+// beside the addresses they read and the transactions they sent. The chain was built so
+// that a record's owner cannot be identified from it — and then the transport handed
+// the join back for free, because asking for a balance reveals whose it is.
+//
+// `VITE_SEPOLIA_RPC_URL` still overrides this, deliberately: it is the escape hatch when
+// the API itself is down. It is also the way to put the leak back, so it is unset by
+// default and should stay that way.
+const RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL || `${API_URL}/rpc`;
 
 let provider = null;
 /** The unwrapped session, in memory. The only place a key exists in usable form. */
