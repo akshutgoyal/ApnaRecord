@@ -225,6 +225,15 @@ export function ChainProvider({ children }) {
   const accountRef = useRef(null);
 
   const getReadProvider = useCallback(() => {
+    // A demo persona reads through the server's RPC proxy, never through an
+    // extension. This is the same reasoning as the role read above: the persona is
+    // not a wallet account, so `window.ethereum` has nothing to say about it — and
+    // if the extension happens to sit on another chain, every read silently returns
+    // the wrong answer rather than failing loudly.
+    //
+    // `getLocalProvider()` is the server-backed JSON-RPC provider, so this also means
+    // demo reads do not leak the viewer's IP to a public node. See session.js.
+    if (demoRoleRef.current) return getLocalProvider();
     // A wallet we created for the user needs no extension, so it takes priority
     // when one is unlocked. This one line is what lets every existing read path in
     // the app run without MetaMask ever being installed.
@@ -392,8 +401,22 @@ export function ChainProvider({ children }) {
       try {
         const provider = getReadProvider();
 
-        if (demoRoleRef.current && !provider) {
-          // Walletless demo: same contract reads, via the backend's public RPC.
+        // Demo personas ALWAYS read through the backend, never through an extension.
+        //
+        // The condition used to be `demoRoleRef.current && !provider`, which meant the
+        // demo path was taken only when no wallet was installed. With MetaMask present
+        // — which is most machines this gets demoed on — `getReadProvider()` returns a
+        // BrowserProvider, so the demo silently fell through to reading the contract
+        // through the extension instead.
+        //
+        // That fails in the worst possible way. `wrongNetwork` is deliberately
+        // suppressed in demo mode (`!demoRole && ...`), so when the extension is sat on
+        // another chain the contract reads return false for every role and the page
+        // reports "this wallet holds no role" — with the wrong-network warning that
+        // would have explained it switched off. A demo persona is not a wallet; the
+        // extension has nothing to say about it and must not be consulted.
+        if (demoRoleRef.current) {
+          // Walletless demo: same contract reads, via the backend's own RPC.
           const info = await chainPermissions(target);
           setChainId(CHAIN_ID);
           setReadReady(true);

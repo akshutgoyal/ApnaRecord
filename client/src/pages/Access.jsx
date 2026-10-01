@@ -351,7 +351,17 @@ export default function Access() {
                 </div>
               )}
 
-              {isDemo && demo}
+              {/* The demo picker belongs on this branch too, not only on the branch
+                  for visitors with no account.
+                  
+                  It used to be `{isDemo && demo}`, so it appeared only once you were
+                  ALREADY demoing. A visitor with MetaMask installed therefore had no
+                  way in at all: the extension reported accounts, `account` became
+                  truthy, the page rendered the "Wallet connected" panel, and the
+                  "Open the demo walkthrough" link from the home page landed here with
+                  no picker. The demo walkthrough was unreachable on exactly the
+                  machines most likely to be used for a demo. */}
+              {demo}
             </div>
           )}
         </Card>
