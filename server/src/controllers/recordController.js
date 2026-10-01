@@ -83,11 +83,8 @@ export async function listRecords(req, res) {
       }
     }
 
-    if (scope) {
-      // No cached rows (or no database): the chain path below still resolves
-      // owners, so scoping applies there too rather than refusing.
-    }
-
+    // No cached rows (or no database racing us): fall through to the chain path, which
+    // resolves owners and applies the same scope below rather than refusing the read.
     const nextTokenId = Number((await call('nextTokenId'))[0]);
     const records = [];
     for (let tokenId = 1; tokenId < nextTokenId; tokenId++) {

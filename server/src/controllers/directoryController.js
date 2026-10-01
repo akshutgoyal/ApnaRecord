@@ -89,6 +89,50 @@ async function isFacility(address) {
 }
 
 /**
+ * Whether an identity write may proceed, given what is already stored.
+ *
+ * Extracted from the handler because it cannot otherwise be tested: the integration
+ * suite runs against a mock whose `hasRole()` and `facilities()` answer for the whole
+ * process, so no request in that suite can reach these branches at all. A pure
+ * function is the only way to pin the rule down.
+ *
+ * Returns null to allow, or { status, error, message } to refuse.
+ */
+export function identityWriteVerdict({ existing, facility, label, isAdmin }) {
+  if (isAdmin || !existing) return null;
+  // CREATE-ONLY, mirroring `createIdentity` on-chain, which reverts `IdentityExists`
+  // rather than rewriting. The handler's upsert IS an overwrite, and without this any
+  // hospital could relabel another hospital's staff — or clear their facility to
+  // address(0) and have the directory present a colleague as a patient. Re-sending the
+  // SAME row stays a no-op, so a retry is still safe.
+  const unchanged =
+    (existing.facility || '') === (facility ? facility.toLowerCase() : '') &&
+    (existing.label || '') === String(label || '').slice(0, 80);
+  if (unchanged) return null;
+  return {
+    status: 409,
+    error: 'IdentityExists',
+    message: 'That identity is already registered. Only the platform may change an existing record.',
+  };
+}
+
+/**
+ * A request belongs to the clinician who filed it.
+ *
+ * Request ids are sequential and public — `nextRequestId` reads the next one — so
+ * without this a second MANAGER could rewrite another doctor's request by guessing the
+ * id, changing the patient it names while the row still claims to be theirs.
+ */
+export function requestWriteVerdict({ existing, requester }) {
+  if (!existing || existing.requester === requester) return null;
+  return {
+    status: 403,
+    error: 'NotAuthorized',
+    message: 'That request was filed by another clinician and cannot be rewritten.',
+  };
+}
+
+/**
  * POST /api/identities
  * Body: { account, label, facility, timestamp, signature }
  *
@@ -135,6 +179,16 @@ export async function recordIdentity(req, res) {
       if (facilityAddr && facilityAddr.toLowerCase() !== signer.toLowerCase()) {
         return res.status(403).json({ error: 'NotAuthorized', message: 'A hospital may only place identities in its own facility.' });
       }
+    }
+
+    const verdict = identityWriteVerdict({
+      existing: await IdentityModel.findOne({ account: account.toLowerCase() }).lean(),
+      facility: facilityAddr,
+      label,
+      isAdmin: admin,
+    });
+    if (verdict) {
+      return res.status(verdict.status).json({ error: verdict.error, message: verdict.message });
     }
 
     const row = await IdentityModel.findOneAndUpdate(
@@ -236,6 +290,15 @@ export async function recordRequest(req, res) {
     if (!holds) {
       return res.status(403).json({ error: 'NotAuthorized', message: 'Only a clinician holding MANAGER_ROLE may file requests.' });
     }
+
+    const verdict = requestWriteVerdict({
+      existing: await RequestModel.findOne({ requestId: Number(requestId) }).lean(),
+      requester: signer.toLowerCase(),
+    });
+    if (verdict) {
+      return res.status(verdict.status).json({ error: verdict.error, message: verdict.message });
+    }
+
     const row = await RequestModel.findOneAndUpdate(
       { requestId: Number(requestId) },
       {

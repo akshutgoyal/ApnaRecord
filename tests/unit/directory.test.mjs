@@ -14,6 +14,8 @@ import {
   identityMessage as serverIdentity,
   facilityMessage as serverFacility,
   requestMessage as serverRequest,
+  identityWriteVerdict,
+  requestWriteVerdict,
 } from '../../server/src/controllers/directoryController.js';
 
 let pass = 0;
@@ -61,6 +63,76 @@ check(
   'lowercase hash input matches either way',
   clientRequest(7, account.toLowerCase(), 'XRAY', 5) ===
     serverRequest(7, account.toLowerCase(), 'XRAY', 5)
+);
+
+// The directory is a shared, append-only-ish resource. `createIdentity` on-chain
+// reverts `IdentityExists` rather than rewriting, and these pin the server to the
+// same rule — otherwise any hospital could relabel another hospital's staff, or
+// clear their facility to zero so the directory presents a colleague as a patient.
+console.log('\nidentityWriteVerdict');
+check(
+  'the platform may change an existing record',
+  identityWriteVerdict({ existing: { label: 'a', facility: '' }, facility: '', label: 'b', isAdmin: true }) === null
+);
+check(
+  'a creating write is allowed',
+  identityWriteVerdict({ existing: null, facility: '', label: 'Patient 101', isAdmin: false }) === null
+);
+check(
+  're-sending an identical row is a no-op, not a conflict',
+  identityWriteVerdict({
+    existing: { label: 'Patient 101', facility: '' },
+    facility: '',
+    label: 'Patient 101',
+    isAdmin: false,
+  }) === null
+);
+check(
+  'relabelling it is refused',
+  identityWriteVerdict({
+    existing: { label: 'Patient 101', facility: '' },
+    facility: '',
+    label: 'Struck off',
+    isAdmin: false,
+  })?.status === 409
+);
+check(
+  'clearing a colleague’s facility to zero is refused',
+  identityWriteVerdict({
+    existing: { label: 'Doctor 101', facility: facility.toLowerCase() },
+    facility: '',
+    label: 'Doctor 101',
+    isAdmin: false,
+  })?.status === 409
+);
+check(
+  'and the refusal is named IdentityExists, matching the chain',
+  identityWriteVerdict({
+    existing: { label: 'a', facility: '' },
+    facility: '',
+    label: 'b',
+    isAdmin: false,
+  })?.error === 'IdentityExists'
+);
+
+console.log('\nrequestWriteVerdict');
+check(
+  'a first filing is allowed',
+  requestWriteVerdict({ existing: null, requester: account.toLowerCase() }) === null
+);
+check(
+  're-filing your own request is a no-op',
+  requestWriteVerdict({
+    existing: { requester: account.toLowerCase() },
+    requester: account.toLowerCase(),
+  }) === null
+);
+check(
+  'rewriting another clinician’s request is refused',
+  requestWriteVerdict({
+    existing: { requester: facility.toLowerCase() },
+    requester: account.toLowerCase(),
+  })?.status === 403
 );
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
