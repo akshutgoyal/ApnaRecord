@@ -11,9 +11,12 @@ import {
   generateRecoveryCode,
   openPrivateKey,
 } from '../../client/src/lib/keystore.js';
-import { enrolMessage } from '../../client/src/lib/wireMessages.js';
+import { enrolMessage, rotateRecoveryMessage } from '../../client/src/lib/wireMessages.js';
 import { storeMessage } from '../../client/src/lib/wireMessages.js';
-import { enrolMessage as serverEnrolMessage } from '../../server/src/controllers/walletController.js';
+import {
+  enrolMessage as serverEnrolMessage,
+  rotateRecoveryMessage as serverRotateMessage,
+} from '../../server/src/controllers/walletController.js';
 import { storeMessage as serverStoreMessage } from '../../server/src/controllers/recordController.js';
 import { check, group, report } from '../support/harness.mjs';
 
@@ -201,5 +204,119 @@ check(
 
 const dripper = await get('/dripper');
 check('the dripper is enabled and reports a balance', dripper.enabled === true, JSON.stringify(dripper).slice(0, 160));
+
+// -------------------------------------------------------------- recovery rotation
+//
+// Rotation is only worth anything if the OLD code genuinely stops working. "The write
+// succeeded" and "the new code opens it" are both satisfiable by a rename; the
+// assertion that carries the feature is the one proving the previous code now fails.
+
+group('recovery code rotation');
+
+check(
+  'the client and server agree on the rotate message byte for byte',
+  rotateRecoveryMessage(probe, 1234567890) === serverRotateMessage(probe, 1234567890),
+  rotateRecoveryMessage(probe, 1234567890)
+);
+check(
+  'the rotate message binds the address and the timestamp',
+  rotateRecoveryMessage(probe, 1) !== rotateRecoveryMessage('0x0000000000000000000000000000000000000002', 1) &&
+    rotateRecoveryMessage(probe, 1) !== rotateRecoveryMessage(probe, 2)
+);
+
+const rot = await enrolOne();
+// Two addresses, and they are not interchangeable: the enrolment row is keyed by the
+// DEPLOYED ACCOUNT, while the sealed copy belongs to its OWNER key. Only the key can
+// sign, so the path names the account and the signature comes from the owner.
+const rotAccount = rot.address;
+const rotOwner = rot.owner;
+const oldCode = rot.recoveryCode;
+const newCode = generateRecoveryCode();
+
+const before = (await get(`/wallet/${rotAccount}`)).enrolment;
+check(
+  'the old code opens the blob as it stands',
+  new Wallet(await openPrivateKey({ sealed: before.sealed, salt: before.salt }, oldCode)).address === rotOwner
+);
+
+const resealed = await sealPrivateKey(rot.privateKey, newCode);
+const rotTs = Date.now();
+const rotated = await post(`/wallet/${rotAccount}/rotate-recovery`, {
+  sealed: resealed.sealed,
+  salt: resealed.salt,
+  iterations: resealed.iterations,
+  timestamp: rotTs,
+  signature: await new Wallet(rot.privateKey).signMessage(rotateRecoveryMessage(rotAccount, rotTs)),
+});
+check('the rotation is accepted', rotated.status === 200, JSON.stringify(rotated.body).slice(0, 200));
+
+const after = (await get(`/wallet/${rotAccount}`)).enrolment;
+check('the stored blob is the new one', after.sealed === resealed.sealed, 'sealed value did not change');
+check(
+  'the new code opens the same key',
+  new Wallet(await openPrivateKey({ sealed: after.sealed, salt: after.salt }, newCode)).address === rotOwner
+);
+
+let oldStillWorks = false;
+try {
+  await openPrivateKey({ sealed: after.sealed, salt: after.salt }, oldCode);
+  oldStillWorks = true;
+} catch {
+  oldStillWorks = false;
+}
+check('the OLD code no longer opens it — the whole point of rotating', !oldStillWorks);
+
+group('rotation refuses what it should');
+
+const impostor = createWallet();
+const forgedTs = Date.now();
+const forged = await post(`/wallet/${rotAccount}/rotate-recovery`, {
+  sealed: resealed.sealed,
+  salt: resealed.salt,
+  iterations: resealed.iterations,
+  timestamp: forgedTs,
+  signature: await new Wallet(impostor.privateKey).signMessage(rotateRecoveryMessage(rotAccount, forgedTs)),
+});
+check('a signature from a key that does not own this wallet is refused', forged.status === 403, `got ${forged.status}`);
+
+const neverEnrolled = createWallet();
+const unknownTs = Date.now();
+const unknown = await post(`/wallet/${neverEnrolled.address}/rotate-recovery`, {
+  sealed: resealed.sealed,
+  salt: resealed.salt,
+  iterations: resealed.iterations,
+  timestamp: unknownTs,
+  signature: await new Wallet(neverEnrolled.privateKey).signMessage(
+    rotateRecoveryMessage(neverEnrolled.address, unknownTs)
+  ),
+});
+check('an address that was never enrolled is refused', unknown.status === 404, `got ${unknown.status}`);
+
+const weakTs = Date.now();
+const weak = await post(`/wallet/${rotAccount}/rotate-recovery`, {
+  sealed: resealed.sealed,
+  salt: resealed.salt,
+  iterations: 1,
+  timestamp: weakTs,
+  signature: await new Wallet(rot.privateKey).signMessage(rotateRecoveryMessage(rotAccount, weakTs)),
+});
+check('a downgraded iteration count is refused', weak.status === 400, `got ${weak.status}`);
+
+const afterWeak = (await get(`/wallet/${rotAccount}`)).enrolment;
+check(
+  'and a refused rotation changed nothing',
+  afterWeak.sealed === resealed.sealed && afterWeak.iterations === resealed.iterations,
+  `iterations now ${afterWeak.iterations}`
+);
+
+const staleTs = Date.now() - 10 * 60 * 1000;
+const stale = await post(`/wallet/${rotAccount}/rotate-recovery`, {
+  sealed: resealed.sealed,
+  salt: resealed.salt,
+  iterations: resealed.iterations,
+  timestamp: staleTs,
+  signature: await new Wallet(rot.privateKey).signMessage(rotateRecoveryMessage(rotAccount, staleTs)),
+});
+check('a stale signature is refused', stale.status === 403, `got ${stale.status}`);
 
 report();

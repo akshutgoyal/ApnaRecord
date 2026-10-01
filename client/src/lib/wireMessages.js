@@ -31,6 +31,21 @@ export function dripMessage(address, timestamp) {
 }
 
 /**
+ * Must match server/src/controllers/walletController.js `rotateRecoveryMessage`.
+ *
+ * Signed by the account's own key. Rotation replaces the wrapping on the local copy —
+ * the key and the account are unchanged — so a signature from the key is the only proof
+ * that means anything here.
+ */
+export function rotateRecoveryMessage(address, timestamp) {
+  return (
+    'ApnaRecord rotate recovery code\n' +
+    `address: ${getAddress(address)}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+
+/**
  * Must match server/src/controllers/directoryController.js `identityMessage`.
  */
 export function identityMessage(account, label, facility, timestamp) {

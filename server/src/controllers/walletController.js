@@ -78,6 +78,22 @@ export function dripMessage(address, timestamp) {
   );
 }
 
+/**
+ * The statement a key signs to replace the wrapping on its own enrolment.
+ *
+ * Signed by the account's OWN key, not by a contact grant. Rotation re-wraps the key
+ * that owns the account, so the only thing that can prove the caller holds it is a
+ * signature from it — an email grant would prove something else entirely, and would
+ * let anyone who controls the mailbox rewrite the wrapping on a key they do not have.
+ */
+export function rotateRecoveryMessage(address, timestamp) {
+  return (
+    'ApnaRecord rotate recovery code\n' +
+    `address: ${ethers.getAddress(address)}\n` +
+    `timestamp: ${timestamp}`
+  );
+}
+
 /** Recover the signer and require it to be the address in question. */
 function verify(message, address, timestamp, signature) {
   const age = Date.now() - Number(timestamp);
@@ -416,6 +432,81 @@ export async function getWallet(req, res) {
     });
   } catch (error) {
     return res.status(500).json({ error: 'WalletReadFailed', message: error.message });
+  }
+}
+
+/**
+ * POST /api/wallet/:address/rotate-recovery
+ * Body: { sealed, salt, iterations, timestamp, signature }
+ *
+ * Replaces the wrapping on an enrolment. The key does not change, the account does not
+ * change, and nothing on chain moves — only the code that opens the local copy is
+ * replaced, so the previous code stops working the moment this succeeds.
+ *
+ * WHAT THIS DOES AND DOES NOT BUY YOU, because the difference is the whole point:
+ *
+ *   It DOES help when a recovery code leaked somewhere it should not have been — a
+ *   photo, a shared note, a screenshot. From here on that code opens nothing.
+ *
+ *   It does NOT help if whoever holds the old code already fetched the old blob. Code
+ *   plus blob IS the private key, and the key is the account's immutable owner, so
+ *   nothing off-chain can take it back. Rotation bounds future exposure; it cannot
+ *   undo past exposure. Saying so plainly is better than implying a guarantee.
+ */
+export async function rotateRecovery(req, res) {
+  if (requireDb(res)) return;
+
+  const { address } = req.params;
+  const { sealed, salt, iterations, timestamp, signature } = req.body || {};
+
+  if (!ethers.isAddress(address)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
+  }
+  if (!looksLikeBase64(sealed, MAX_SEALED_CHARS) || !looksLikeBase64(salt, MAX_SALT_CHARS)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'sealed and salt must be base64.' });
+  }
+
+  // The KDF parameters are part of what is being stored, so they are bounded here
+  // rather than taken on trust. A caller who could set `iterations` to 1 would be
+  // choosing how hard their own key is to brute-force — and, if they later forgot the
+  // code, would have avoided the cost that exists to prevent exactly that.
+  const rounds = Number(iterations) || 600000;
+  if (!Number.isInteger(rounds) || rounds < 100000 || rounds > 10000000) {
+    return res.status(400).json({
+      error: 'BadRequest',
+      message: 'iterations must be an integer between 100000 and 10000000.',
+    });
+  }
+
+  try {
+    // `:address` is the DEPLOYED ACCOUNT — that is what the enrolment row is keyed by,
+    // and what a lookup names. The sealed copy belongs to its `owner`, the key.
+    const existing = await EnrolmentModel.findOne({ address: address.toLowerCase() }).lean();
+    if (!existing) {
+      return res.status(404).json({
+        error: 'NotEnrolled',
+        message: 'No wallet has been created for that address.',
+      });
+    }
+
+    // The signature must come from the OWNER key, not from `address`. The account is a
+    // contract and cannot sign at all, so requiring a signature that recovers to it
+    // would not be stricter — it would make rotation impossible.
+    const problem = verify(rotateRecoveryMessage(address, timestamp), existing.owner, timestamp, signature);
+    if (problem) return res.status(403).json({ error: 'SignatureInvalid', message: problem });
+
+    await EnrolmentModel.updateOne(
+      { address: address.toLowerCase() },
+      { $set: { sealed, salt, iterations: rounds, rotatedAt: new Date() } }
+    );
+
+    return res.json({
+      ok: true,
+      address: existing.address,
+      note: 'Recovery code replaced. The previous code no longer opens this wallet.',
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'RotateFailed', message: error.message });
   }
 }
 

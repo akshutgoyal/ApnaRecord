@@ -118,6 +118,11 @@ const EnrolmentSchema = new mongoose.Schema(
     sealed: { type: String, required: true },
     salt: { type: String, required: true },
     iterations: { type: Number, default: 600000 },
+    // Set when the owner replaces their recovery code. Null means never rotated, which
+    // is the common case — rotation exists for the day a code leaked, not as routine
+    // hygiene, and a field that is usually null still earns its place by making the
+    // exceptional case visible.
+    rotatedAt: { type: Date, default: null },
     // The verified contact binding.
     //
     // `kind` has exactly one legal value and is not a seam for anything — there is no

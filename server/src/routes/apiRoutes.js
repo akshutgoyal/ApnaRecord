@@ -23,7 +23,7 @@ import {
   deleteProfile,
 } from '../controllers/profileController.js';
 import { stats } from '../controllers/statsController.js';
-import { enrol, getWallet, lookupWallets, requestDrip, dripperHealth, rebind } from '../controllers/walletController.js';
+import { enrol, getWallet, lookupWallets, requestDrip, dripperHealth, rebind, rotateRecovery } from '../controllers/walletController.js';
 import { sendCode, checkCode } from '../controllers/identityController.js';
 import {
   recordIdentity,
@@ -75,6 +75,10 @@ router.post('/wallet/lookup', lookupWallets);
 // Move a wallet to a new key while it still holds nothing. Declared before the
 // `:address` routes so the literal path is never read as an address.
 router.post('/wallet/rebind', rebind);
+// Replace the recovery code without changing the key or the account. Signed by the
+// account's own key, so it is only reachable by someone who can already unlock — and
+// it cannot undo a code that has already been used to fetch this blob. See the handler.
+router.post('/wallet/:address/rotate-recovery', rotateRecovery);
 router.post('/wallet/:address/drip', requestDrip);
 router.get('/wallet/:address', getWallet);
 

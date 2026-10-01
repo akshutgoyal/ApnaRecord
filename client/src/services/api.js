@@ -71,6 +71,16 @@ export const getWalletBlob = (address) => request(`/wallet/${address}`);
 export const requestDrip = (address, payload) =>
   request(`/wallet/${address}/drip`, { method: 'POST', body: JSON.stringify(payload) });
 
+/**
+ * Replace the recovery code that wraps this wallet's key.
+ *
+ * Changes nothing on chain: same key, same account, same records. It only swaps the
+ * code that opens the local copy, so the previous code stops working. The payload is
+ * signed by the account's own key, so this is reachable only from an unlocked session.
+ */
+export const rotateRecovery = (address, payload) =>
+  request(`/wallet/${address}/rotate-recovery`, { method: 'POST', body: JSON.stringify(payload) });
+
 export const chainIdentities = () => request('/chain/identities');
 export const chainPermissions = (address) => request(`/chain/permissions/${address}`);
 
