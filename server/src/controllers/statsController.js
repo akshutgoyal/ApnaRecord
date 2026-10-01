@@ -278,9 +278,12 @@ const [identityList, allEvents, labels, profiles] = await Promise.all([
     { name: 'Admin', value: identityList.filter((i) => i.roles.admin).length },
     { name: 'Manager', value: identityList.filter((i) => i.roles.manager).length },
     { name: 'Auditor', value: identityList.filter((i) => i.roles.auditor).length },
+    { name: 'Hospital', value: identityList.filter((i) => i.roles.hospital).length },
     {
       name: 'Unassigned',
-      value: identityList.filter((i) => !i.roles.admin && !i.roles.manager && !i.roles.auditor)
+      value: identityList.filter(
+        (i) => !i.roles.admin && !i.roles.manager && !i.roles.auditor && !i.roles.hospital
+      )
         .length,
     },
   ];

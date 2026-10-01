@@ -41,6 +41,56 @@ export function getInterface() {
  * as msg.sender, so the contract runs its real permission checks against that
  * address. We never re-implement a rule here — we ask the contract.
  */
+/**
+ * A public RPC drops a fraction of calls once they arrive together, and ethers reports
+ * the drop as an empty revert: `data: null, reason: null, revert: null`.
+ *
+ * That is the same shape a reason-less revert produces, so it cannot be distinguished
+ * from the error alone — but every revert in this contract carries a custom-error
+ * selector, so a null-data failure from this address is transport, not the contract.
+ *
+ * Retrying is safe in both readings. If it was a real revert it fails identically on the
+ * next attempt and surfaces unchanged, a few hundred milliseconds later; if it was a drop
+ * it succeeds. Without this, one dropped call out of a dozen kills the whole aggregate —
+ * which is why `computeStats()` returned 502 while every individual call worked, and why
+ * the dashboard served a stale payload it could not refresh.
+ */
+const CALL_ATTEMPTS = Number(process.env.CHAIN_CALL_ATTEMPTS) || 3;
+const CALL_RETRY_MS = 150;
+
+/**
+ * How many chain calls may be in flight at once.
+ *
+ * This endpoint does not degrade gracefully under concurrency — it drops calls. Measured
+ * against `sepolia.base.org`: 25 concurrent `eth_call`s produced 18 successes and 7
+ * failures, while the same call issued ten times in sequence produced ten successes.
+ *
+ * `computeStats()` fans out with `Promise.all`, so a dozen calls arrive together and one
+ * drop takes down the whole aggregate. Retrying each call does not help, because the
+ * retries are issued concurrently too and meet the same overload. The fix is not to send
+ * them together: a slow correct answer beats a fast wrong one, and this endpoint already
+ * serves a cached payload while refreshing behind the request.
+ */
+const CHAIN_CONCURRENCY = Number(process.env.CHAIN_CONCURRENCY) || 3;
+let inFlightCalls = 0;
+const callQueue = [];
+
+function acquireSlot() {
+  if (inFlightCalls < CHAIN_CONCURRENCY) {
+    inFlightCalls += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => callQueue.push(resolve));
+}
+
+function releaseSlot() {
+  const next = callQueue.shift();
+  // Hand the slot straight over rather than decrementing and re-incrementing, so a
+  // queued caller cannot be overtaken by a new one arriving in the same tick.
+  if (next) next();
+  else inFlightCalls -= 1;
+}
+
 export async function callAs(functionName, args, from) {
   const i = getInterface();
   // Fail loudly on a missing ABI entry. Swallowing this is how a record once
@@ -51,12 +101,31 @@ export async function callAs(functionName, args, from) {
     );
   }
   const data = i.encodeFunctionData(functionName, args);
-  const result = await getProvider().call({
-    to: getAddress(),
-    data,
-    ...(from ? { from: ethers.getAddress(from) } : {}),
-  });
-  return i.decodeFunctionResult(functionName, result);
+
+  await acquireSlot();
+  try {
+    let lastError;
+    for (let attempt = 1; attempt <= CALL_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await getProvider().call({
+          to: getAddress(),
+          data,
+          ...(from ? { from: ethers.getAddress(from) } : {}),
+        });
+        return i.decodeFunctionResult(functionName, result);
+      } catch (error) {
+        // A null-data failure is the only one worth retrying. A revert carrying a
+        // selector is the contract answering, and repeating it wastes a round trip.
+        const looksDropped = !error?.data && !error?.reason;
+        if (!looksDropped || attempt === CALL_ATTEMPTS) throw error;
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, CALL_RETRY_MS * attempt));
+      }
+    }
+    throw lastError;
+  } finally {
+    releaseSlot();
+  }
 }
 
 /** Execute a `view` function from a neutral address (no permissions). */
@@ -239,14 +308,19 @@ export async function identities() {
   const managerRole = (await call('MANAGER_ROLE'))[0];
   const auditorRole = (await call('AUDITOR_ROLE'))[0];
   const adminRole = (await call('DEFAULT_ADMIN_ROLE'))[0];
+  // HOSPITAL_ROLE was never read here, so a hospital holding it had no role to count and
+  // was reported as "Unassigned". Granting a hospital its role changed nothing on the
+  // dashboard, which is a confusing way to learn that a field is missing.
+  const hospitalRole = (await call('HOSPITAL_ROLE'))[0];
 
   const out = await Promise.all(
     [...seen.values()].map(async (identity) => {
-      const [identityRecord, manager, auditor, admin] = await Promise.all([
+      const [identityRecord, manager, auditor, admin, hospital] = await Promise.all([
         call('identities', [identity.account]),
         call('hasRole', [managerRole, identity.account]),
         call('hasRole', [auditorRole, identity.account]),
         call('hasRole', [adminRole, identity.account]),
+        call('hasRole', [hospitalRole, identity.account]),
       ]);
       return {
         ...identity,
@@ -259,6 +333,7 @@ export async function identities() {
           admin: admin[0],
           manager: manager[0],
           auditor: auditor[0],
+          hospital: hospital[0],
         },
       };
     })
@@ -289,11 +364,13 @@ export async function permissions(address) {
   const managerRole = (await call('MANAGER_ROLE'))[0];
   const auditorRole = (await call('AUDITOR_ROLE'))[0];
   const adminRole = (await call('DEFAULT_ADMIN_ROLE'))[0];
-  const [identityRecord, manager, auditor, admin, did, isFacility] = await Promise.all([
+  const hospitalRole = (await call('HOSPITAL_ROLE'))[0];
+  const [identityRecord, manager, auditor, admin, hospital, did, isFacility] = await Promise.all([
     call('identities', [address]),
     call('hasRole', [managerRole, address]),
     call('hasRole', [auditorRole, address]),
     call('hasRole', [adminRole, address]),
+    call('hasRole', [hospitalRole, address]),
     call('didFor', [address]),
     call('facilities', [address]),
   ]);
@@ -322,6 +399,7 @@ export async function permissions(address) {
       admin: admin[0],
       manager: manager[0],
       auditor: auditor[0],
+      hospital: hospital[0],
     },
   };
 }
