@@ -448,9 +448,9 @@ export default function Admin() {
 
           {!pendingLoading && !pendingError && pending.length === 0 && (
             <EmptyState
-              title="Nobody is waiting"
-              body="Every enrolled wallet already has an identity, or nobody has signed up yet."
-            />
+  title="No pending approvals"
+  body="Every enrolled wallet already has an identity, or nobody has signed up yet."
+/>
           )}
 
           {!pendingLoading && pending.length > 0 && (
