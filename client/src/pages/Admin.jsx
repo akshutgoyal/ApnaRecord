@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { isAddress } from 'ethers';
+import { isAddress, ZeroAddress } from 'ethers';
 import { useChain, describeError, contractError } from '../chain';
 import { encryptRecord, formatBytes, toBase64 } from '../crypto';
-import { chainIdentities, chainEvents, storeRecord, recordIdentity, recordFacility } from '../services/api';
+import { chainIdentities, chainEvents, storeRecord, recordIdentity, recordFacility, pendingRegistrations } from '../services/api';
 import { storeMessage, identityMessage, facilityMessage } from '../lib/wireMessages';
 import { TX_EXPLORER } from '../contract';
 import { useTx } from '../hooks/useTx';
@@ -39,6 +39,13 @@ export default function Admin() {
   const [newFacility, setNewFacility] = useState({ it: '', name: '' });
   const [mint, setMint] = useState({ patient: '', recordType: 'MRI_SCAN', file: null });
   const [revokeId, setRevokeId] = useState('');
+  // Who has enrolled but has no identity yet. See loadPending below.
+  const [pending, setPending] = useState([]);
+  const [pendingError, setPendingError] = useState(null);
+  const [pendingLoading, setPendingLoading] = useState(true);
+  const [facilityName, setFacilityName] = useState('');
+  const [assigning, setAssigning] = useState(null);
+
   const [searchParams] = useSearchParams();
 
   // A request in the dashboard's queue links straight here with the patient and
@@ -55,6 +62,82 @@ export default function Admin() {
       recordType: handoffType || current.recordType,
     }));
   }, [handoffPatient, handoffType]);
+
+  /**
+   * Enrolments the contract has no identity for.
+   *
+   * The list is SIGNED, because it carries masked email addresses — the only read in the
+   * app that requires it. The other directory reads are open by decision; an open list of
+   * who has signed up is a different thing from an open list of hospitals.
+   */
+  const loadPending = useCallback(async () => {
+    setPendingLoading(true);
+    setPendingError(null);
+    try {
+      const result = await pendingRegistrations((message) => signMessage(message));
+      setPending(result.pending || []);
+    } catch (error) {
+      setPendingError(describeError(error));
+    } finally {
+      setPendingLoading(false);
+    }
+  }, [signMessage]);
+
+  useEffect(() => {
+    if (account) loadPending();
+  }, [account, loadPending]);
+
+  /**
+   * Register the identity and grant the role, in the order the contract demands.
+   *
+   * THE HOSPITAL'S ORDER IS LOAD-BEARING. `createIdentity(addr, addr)` reverts
+   * `NotAFacility` unless `createFacility` has run first — that is the exact failure that
+   * stopped the hospital registering anything earlier in this project. Encoding the
+   * sequence here rather than expecting whoever clicks to remember is the entire reason
+   * these buttons exist rather than a form.
+   *
+   * A doctor is registered with facility 0 (global), which matches the contract's own note
+   * that doctors are scoped by consent grants rather than by facility membership.
+   */
+  const ROLE_FOR = { auditor: 'AUDITOR_ROLE', doctor: 'MANAGER_ROLE', hospital: 'HOSPITAL_ROLE' };
+
+  const assign = useCallback(async (row, role) => {
+    const addr = row.address;
+    setAssigning(addr + role);
+    try {
+      await run(`Assign ${role}`, async () => {
+        if (role === 'hospital') {
+          const name = facilityName.trim() || `Hospital ${addr.slice(0, 6)}`;
+          const created = await writeAs('createFacility', [addr, name]);
+          await created.wait();
+        }
+
+        const minted = await writeAs('createIdentity', [
+          addr,
+          role === 'hospital' ? addr : ZeroAddress,
+        ]);
+        await minted.wait();
+
+        const name = ROLE_FOR[role];
+        if (name) {
+          const [constant] = await readContract(name);
+          const granted = await writeAs('grantRole', [constant, addr]);
+          await granted.wait();
+        }
+      });
+
+      // Verified, not assumed. The row is re-read from the chain rather than removed
+      // because the sequence returned: a button that reports success without checking is
+      // how you come to believe a role landed when a popup was dismissed.
+      await loadPending();
+      toast.ok(`${role} assigned`, `${addr.slice(0, 10)}… is registered${ROLE_FOR[role] ? ' and holds its role' : ''}.`);
+    } catch (error) {
+      toast.error('Assignment failed', describeError(error));
+      await loadPending();
+    } finally {
+      setAssigning(null);
+    }
+  }, [run, writeAs, readContract, loadPending, toast, facilityName]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -304,6 +387,76 @@ export default function Admin() {
       )}
 
       <div className="grid gap-5 lg:grid-cols-2">
+        <Card
+          className="lg:col-span-2"
+          title="Awaiting an identity"
+          subtitle="Wallets that have enrolled but hold no identity on the contract. Enrolment registers nobody — this is that step, with the order the contract requires already applied."
+        >
+          {pendingError && (
+            <Callout tone="danger" title="Could not read pending registrations">
+              {pendingError}
+            </Callout>
+          )}
+
+          {pendingLoading && !pendingError && <SkeletonRows rows={2} />}
+
+          {!pendingLoading && !pendingError && pending.length === 0 && (
+            <EmptyState
+              title="Nobody is waiting"
+              body="Every enrolled wallet already has an identity, or nobody has signed up yet."
+            />
+          )}
+
+          {pending.length > 0 && (
+            <>
+              <Field label="Facility name" hint="Used only when assigning Hospital.">
+                <input
+                  type="text"
+                  value={facilityName}
+                  onChange={(e) => setFacilityName(e.target.value)}
+                  placeholder="City Hospital 101"
+                  className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-peacock-400"
+                />
+              </Field>
+
+              <ul className="mt-1 space-y-2">
+                {pending.map((row) => (
+                  <li key={row.address} className="rounded-lg border border-line bg-white p-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <span className="mono truncate text-[11px] text-ink">{row.address}</span>
+                      <span className="text-[11px] text-slate-500">
+                        {row.emailMasked || 'no email on file'}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {['patient', 'doctor', 'auditor', 'hospital'].map((role) => (
+                        <button
+                          key={role}
+                          type="button"
+                          onClick={() => assign(row, role)}
+                          disabled={assigning !== null}
+                          className="rounded-lg border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium capitalize text-slate-600 transition hover:border-peacock-300 hover:bg-peacock-50/50 disabled:opacity-60"
+                        >
+                          {assigning === row.address + role ? <Busy label={role} /> : role}
+                        </button>
+                      ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <p className="mt-2 text-[10px] leading-snug text-slate-500">
+                One confirmation per role, except <span className="font-semibold">hospital</span> —
+                that runs <span className="mono">createFacility</span> first, then
+                <span className="mono"> grantRole</span>, then
+                <span className="mono"> createIdentity</span>, because the contract refuses an
+                identity for a facility that does not exist yet. Expect three confirmations.
+              </p>
+            </>
+          )}
+        </Card>
+
         <Card
           title="1 · Register an identity"
           subtitle="Identity creation is itself an auditable on-chain event."
