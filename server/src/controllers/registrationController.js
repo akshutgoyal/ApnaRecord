@@ -97,7 +97,21 @@ export async function pendingRegistrations(req, res) {
     for (const row of rows) {
       // `identities()` returns a struct; index 1 is `active`, index 2 is `facility`.
       const [identity] = await call('identities', [row.address]);
-      if (identity && identity.active) continue;
+      // A read that returned NOTHING is not the same as an identity that does not exist.
+      // A missing identity is a zeroed struct, not an absent one, so treating the two alike
+      // would list every enrolled wallet as unregistered the moment the RPC gaped -- which is
+      // the same confident-wrong answer the dashboards produced.
+      if (!identity) {
+        return res.status(503).json({
+          error: 'ChainUnavailable',
+          message: 'Could not read the identity registry, so the waiting list cannot be trusted.',
+        });
+      }
+      // `active` by name, falling back to the index. ethers answers to both ONLY when the
+      // ABI names its struct components; reading the wrong one yields undefined, which is
+      // falsy, so every candidate looked unregistered and the list never cleared however
+      // many assignments had landed.
+      if ((identity.active ?? identity[1] ?? false)) continue;
 
       pending.push({
         address: row.address,
