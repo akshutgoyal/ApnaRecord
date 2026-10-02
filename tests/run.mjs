@@ -204,6 +204,7 @@ function serverEnv(port) {
     // which turns on the production configuration requirements — a test run should
     // not depend on what happened to be exported in the terminal that launched it.
     NODE_ENV: 'test',
+    EMAIL_PROVIDER: 'mock',
     PORT: String(port),
     DATABASE_URL,
     RPC_URL: CHAIN,

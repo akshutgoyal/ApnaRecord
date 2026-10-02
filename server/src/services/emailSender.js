@@ -1,9 +1,14 @@
 // WHERE THE VERIFICATION CODE IS ACTUALLY SENT.
 //
-// One interface, three implementations. The default is `mock`, which prints the code to
-// the server log and returns it to the browser — so enrolment works with no account with
-// any provider, no DNS records, and no credentials, and the whole flow is demonstrable
-// today. Swapping to a real relay is an env change, not a code change.
+// One interface, two implementations. The default is `brevo`, and it is the default
+// because the alternative fails silently: a code that only ever reached a log is
+// indistinguishable, from the user's side, from a server that is broken.
+//
+// `mock` still exists, and is still permitted — but ONLY while NODE_ENV=test. That is how
+// the suite reads a code without sending mail, and it is exactly the mode that must never
+// be reachable in a deployment. Gating it on the ENVIRONMENT rather than on a value means
+// a missing or mistyped EMAIL_PROVIDER in production fails loudly at boot rather than
+// quietly pretending to send.
 //
 // WHY A RELAY RATHER THAN SMTP STRAIGHT FROM THE SERVER. A verification code sent from a
 // shared host's mail server lands in spam more often than not, and a code nobody can find
@@ -19,7 +24,21 @@
 //
 // Miss any of the three and the failure is silent: codes arrive in spam, or nowhere.
 
-const PROVIDER = () => (process.env.EMAIL_PROVIDER || 'mock').toLowerCase();
+const isTestEnvironment = () => process.env.NODE_ENV === 'test';
+
+const PROVIDER = () => {
+  const chosen = (process.env.EMAIL_PROVIDER || 'brevo').toLowerCase();
+  if (chosen === 'mock' && !isTestEnvironment()) {
+    throw new Error(
+      'EMAIL_PROVIDER=mock is only allowed while NODE_ENV=test. In any other environment it ' +
+        'sends nothing at all: the code goes to the log and into the API response, so users ' +
+        'wait for an email that was never sent. Set EMAIL_PROVIDER=brevo together with ' +
+        'BREVO_API_KEY and EMAIL_FROM, or run the suite, which pins NODE_ENV=test.'
+    );
+  }
+  return chosen;
+};
+
 
 export function emailProviderName() {
   return PROVIDER();
