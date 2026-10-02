@@ -106,21 +106,41 @@ export default function Admin() {
     setAssigning(addr + role);
     try {
       await run(`Assign ${role}`, async () => {
-        if (role === 'hospital') {
-          const name = facilityName.trim() || `Hospital ${addr.slice(0, 6)}`;
-          const created = await writeAs('createFacility', [addr, name]);
-          await created.wait();
+        if (role === 'hospital') {          // Checked rather than attempted: createFacility reverts if the facility exists, and a
+          // retry after a failed grant must not die on a step that already succeeded.
+          const contract = await readContract();
+          if (!(await contract.facilities(addr))) {
+            const name = facilityName.trim() || `Hospital ${addr.slice(0, 6)}`;
+            const created = await writeAs('createFacility', [addr, name]);
+            await created.wait();
+          }
+        }
+        // The identity may already exist from a previous attempt whose grant failed.
+
+        // `createIdentity` is create-only and reverts IdentityExists, so tolerating that is what
+
+        // lets this button FINISH a half-completed assignment instead of being stuck on it.
+
+        try {
+
+          const minted = await writeAs('createIdentity', [addr, role === 'hospital' ? addr : ZeroAddress]);
+
+          await minted.wait();
+
+        } catch (error) {
+
+          if (contractError(error)?.name !== 'IdentityExists') throw error;
+
         }
 
-        const minted = await writeAs('createIdentity', [
-          addr,
-          role === 'hospital' ? addr : ZeroAddress,
-        ]);
-        await minted.wait();
-
         const name = ROLE_FOR[role];
-        if (name) {
-          const [constant] = await readContract(name);
+        if (name) {          // `readContract` RETURNS A CONTRACT -- it is not a getter. `readContract('MANAGER_ROLE')`
+          // ignores its argument and hands back the contract itself, so destructuring a role
+          // constant off it yields undefined. `grantRole(undefined, addr)` encodes to nonsense, so
+          // the grant silently never happens: every call is signed, gas is spent, and the user is
+          // left holding an identity and no role -- which is exactly what was reported.
+          const contract = await readContract();
+          const constant = await contract[name]();
           const granted = await writeAs('grantRole', [constant, addr]);
           await granted.wait();
         }
