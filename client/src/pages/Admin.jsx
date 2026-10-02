@@ -796,6 +796,7 @@ export default function Admin() {
                       {entry.roles.admin && <Pill tone="peacock">admin</Pill>}
                       {entry.roles.manager && <Pill tone="peacock">manager</Pill>}
                       {entry.roles.auditor && <Pill tone="peacock">auditor</Pill>}
+                      {entry.roles.hospital && <Pill tone="peacock">hospital</Pill>}
                       {!entry.active && <Status state="revoked" />}
                     </div>
                     <p className="mono mt-0.5 truncate text-slate-500">{entry.account}</p>

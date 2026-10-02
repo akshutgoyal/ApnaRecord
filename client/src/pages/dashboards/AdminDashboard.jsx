@@ -236,7 +236,7 @@ export default function AdminDashboard() {
               key: 'roles',
               label: 'Roles',
               value: (row) =>
-                [row.roles.admin && 'admin', row.roles.manager && 'manager', row.roles.auditor && 'auditor']
+                [row.roles.admin && 'admin', row.roles.manager && 'manager', row.roles.auditor && 'auditor', row.roles.hospital && 'hospital']
                   .filter(Boolean)
                   .join(' '),
             },
@@ -532,6 +532,7 @@ export default function AdminDashboard() {
                     row.roles.admin && 'Admin',
                     row.roles.manager && 'Manager',
                     row.roles.auditor && 'Auditor',
+                    row.roles.hospital && 'Hospital',
                   ].filter(Boolean);
                   return held.length ? (
                     <div className="flex flex-wrap justify-center gap-1">
