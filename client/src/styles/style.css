@@ -132,6 +132,31 @@
    * Holding the border at `line-strong` and stepping the fill up to slate-100 keeps the
    * control visible as a control, while the muted text still says it is not available.
    */
+  /*
+   * A busy control has to stay readable, whatever is inside it.
+   *
+   * `Busy` hard-codes `text-slate-500` — rgb(106,97,83) — and the disabled fill of a
+   * filled button is slate-500, also rgb(106,97,83). Content and background were not
+   * merely low contrast, they were the SAME COLOUR, so the label and the spinner vanished
+   * completely while the button looked empty. The spinner's `border-current` was honouring
+   * an invisible colour, which is why it disappeared too.
+   *
+   * Forcing the colour down the tree means any future child — a spinner, an icon, a nested
+   * span — inherits the legible colour rather than picking its own. A `*` rule is blunt,
+   * and deliberate here: the alternative is auditing every component that might one day be
+   * rendered inside a button.
+   */
+  .btn-primary:disabled,
+  .btn-danger:disabled,
+  .btn-accent:disabled {
+    @apply text-white;
+  }
+  .btn-primary:disabled *,
+  .btn-danger:disabled *,
+  .btn-accent:disabled * {
+    color: inherit;
+  }
+
   .btn-secondary {
     @apply btn border border-line-strong bg-white text-ink hover:bg-slate-50
            disabled:border-line-strong disabled:bg-slate-100 disabled:text-slate-500
