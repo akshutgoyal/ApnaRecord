@@ -15,6 +15,10 @@ services:
         sync: false
       - key: RPC_URL
         value: https://sepolia.base.org
+
+      - key: LOGS_RPC_URL
+
+        value: https://sepolia.base.org
       - key: CHAIN_ID
         value: "84532"
       - key: EXPLORER_BASE
