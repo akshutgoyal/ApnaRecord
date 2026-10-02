@@ -117,7 +117,10 @@ export default function Admin() {
     const addr = row.address;
     setAssigning(addr + role);
     try {
-      await run(`Assign ${role}`, async () => {
+      // `run` never throws -- it catches, reports and returns { ok, error }. Awaiting it
+      // and ignoring the result meant a FAILED assignment fell through to the success toast
+      // below, so the panel claimed success while the chain said otherwise.
+      const outcome = await run(`Assign ${role}`, async () => {
         if (role === 'hospital') {          // Checked rather than attempted: createFacility reverts if the facility exists, and a
           // retry after a failed grant must not die on a step that already succeeded.
           const contract = await readContract();
@@ -166,7 +169,14 @@ export default function Admin() {
       // because the sequence returned: a button that reports success without checking is
       // how you come to believe a role landed when a popup was dismissed.
       await loadPending();
-      toast.ok(`${role} assigned`, `${addr.slice(0, 10)}… is registered${ROLE_FOR[role] ? ' and holds its role' : ''}.`);
+      // `run` never throws: it catches, reports and returns { ok, error }. Ignoring the
+      // result meant a FAILED assignment fell through to a success toast, so the panel
+      // claimed the role had been granted while the chain said otherwise.
+      if (outcome.ok) {
+        toast.ok(`${role} assigned`, `${addr.slice(0, 10)}… is registered${ROLE_FOR[role] ? ' and holds its role' : ''}.`);
+      } else {
+        toast.error('Assignment failed', outcome.error?.detail || outcome.error?.title || 'The contract refused it.');
+      }
     } catch (error) {
       toast.error('Assignment failed', describeError(error));
       await loadPending();
