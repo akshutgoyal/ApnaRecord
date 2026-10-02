@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { NavLink, Link, useLocation } from 'react-router-dom';
+import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useChain, shortAddress } from '../../chain';
+import { clearSession, forgetDevice } from '../../lib/session';
 import { ROLES, CONTRACT_ADDRESS, EXPLORER } from '../../contract';
 import Brand, { Logomark } from '../Brand';
 import StatusBanner from '../StatusBanner';
@@ -135,13 +136,56 @@ export default function AppShell({ children }) {
 
   const close = () => setOpen(false);
   const railWidth = collapsed ? 'lg:w-16' : 'lg:w-64';
+  const navigate = useNavigate();
+
+  // Logout means two different things depending on which wallet this is.
+  //
+  // A demo persona holds no key, so there is nothing to forget and leaving the demo is
+  // the whole action. A real session is different: the sealed key lives in IndexedDB, and
+  // removing it is NOT recoverable without the recovery code. So it is confirmed rather
+  // than done on a stray click — the failure mode is somebody losing their account and
+  // only discovering it at the sign-in screen, with the console having given no warning.
+  const logout = async () => {
+    if (isDemo) {
+      exitDemo();
+      navigate('/access');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Log out and remove this wallet from this device?\n\n' +
+        'You will need your recovery code to sign back in. If you have not written it ' +
+        'down yet, cancel and save it first — this cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    try {
+      await forgetDevice();
+    } catch {
+      /* nothing stored to forget — still clear the marker */
+    }
+    clearSession();
+    navigate('/access');
+  };
 
   return (
     <div className="flex min-h-screen bg-paper">
       {/* ---------------------------------------------------------- sidebar */}
+      {/* `lg:static` put the rail back into the document flow on desktop, so it scrolled
+          away with the page — the nav left the screen the moment you scrolled a long
+          dashboard. `lg:sticky` pins it instead.
+
+          Sticky rather than fixed on purpose: a sticky element still occupies flow space,
+          so the flex row below keeps offsetting the main column by exactly the rail's
+          width. Pinning it with `fixed` would have lifted it out of the layout and put it
+          on top of the content, and the offset would then have to be hard-coded — a number
+          that drifts the moment the rail collapses to 64px. `lg:inset-y-auto` clears the
+          `inset-y-0` the mobile drawer needs, and `lg:h-screen` gives it the viewport to
+          scroll within. */}
       <aside
         className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col overflow-y-auto border-r border-line bg-white
-                    transition-[transform,width] duration-200 lg:static lg:translate-x-0 ${railWidth} ${
+                    transition-[transform,width] duration-200
+                    lg:sticky lg:inset-y-auto lg:top-0 lg:h-screen lg:translate-x-0 ${railWidth} ${
                       open ? 'translate-x-0' : '-translate-x-full'
                     }`}
       >
@@ -232,6 +276,18 @@ export default function AppShell({ children }) {
                 </span>
                 <span className="text-[10px] text-slate-400">Sepolia</span>
               </div>
+            )}
+
+            {/* Sits under the identity block, with the role chip, because it is the same
+                question: which wallet am I, and how do I stop being it. */}
+            {!collapsed && (
+              <button
+                type="button"
+                onClick={logout}
+                className="btn-ghost mt-1.5 w-full justify-start px-2 py-1 text-[11px]"
+              >
+                {isDemo ? 'Exit demo' : 'Log out'}
+              </button>
             )}
           </div>
         )}
