@@ -474,9 +474,10 @@ export default function Admin() {
                         {row.emailMasked || 'no email on file'}
                       </span>
 
-                      {/* What they asked to be. Shown, not applied: the buttons below are
-                          still the whole choice, because a self-declared role is a
-                          preference and the administrator is the one who decides. */}
+                      {/* The role they asked for. It leads the buttons below as the primary
+                          action, so the ordinary case is one confirm rather than the same
+                          decision made twice. It is still a decision: they chose at signup,
+                          and nothing is granted until an administrator acts. */}
                       {row.requestedRole && (
                         <span className="rounded-full bg-peacock-50 px-2 py-0.5 text-[10px] font-medium text-peacock-700">
                           asked: {row.requestedRole}
@@ -485,17 +486,40 @@ export default function Admin() {
                     </div>
 
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {['patient', 'doctor', 'auditor', 'hospital'].map((role) => (
-                        <button
-                          key={role}
-                          type="button"
-                          onClick={() => assign(row, role)}
-                          disabled={assigning !== null}
-                          className="rounded-lg border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium capitalize text-slate-600 transition hover:border-peacock-300 hover:bg-peacock-50/50 disabled:opacity-60"
-                        >
-                          {assigning === row.address + role ? <Busy label={role} /> : role}
-                        </button>
-                      ))}
+                      {(() => {
+                        // The requested role is moved to the front and made primary. Four
+                        // equal buttons asked the administrator to re-make a decision the
+                        // person had already made -- and offered them the chance to make it
+                        // differently by accident. The others stay, because an administrator
+                        // must be able to overrule a request.
+                        const ALL = ['patient', 'doctor', 'auditor', 'hospital'];
+                        const asked = ALL.includes(row.requestedRole) ? row.requestedRole : null;
+                        const ordered = asked ? [asked, ...ALL.filter((r) => r !== asked)] : ALL;
+                        return ordered.map((role) => {
+                          const primary = role === asked;
+                          return (
+                            <button
+                              key={role}
+                              type="button"
+                              onClick={() => assign(row, role)}
+                              disabled={assigning !== null}
+                              className={
+                                primary
+                                  ? 'rounded-lg border border-peacock-600 bg-peacock-600 px-2.5 py-1.5 text-[11px] font-medium capitalize text-white transition hover:bg-peacock-700 disabled:opacity-60'
+                                  : 'rounded-lg border border-line bg-white px-2.5 py-1.5 text-[11px] font-medium capitalize text-slate-600 transition hover:border-peacock-300 hover:bg-peacock-50/50 disabled:opacity-60'
+                              }
+                            >
+                              {assigning === row.address + role ? (
+                                <Busy label={role} />
+                              ) : primary ? (
+                                `Approve as ${role}`
+                              ) : (
+                                role
+                              )}
+                            </button>
+                          );
+                        });
+                      })()}
                     </div>
                   </li>
                 ))}
