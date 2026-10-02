@@ -96,7 +96,11 @@ export async function pendingRegistrations(req, res) {
     const pending = [];
     for (const row of rows) {
       // `identities()` returns a struct; index 1 is `active`, index 2 is `facility`.
-      const [identity] = await call('identities', [row.address]);
+      // `call()` ALREADY returns the decoded struct. Destructuring it took `createdAt` --
+      // the first component -- so `identity.active` and `identity[1]` were both undefined,
+      // both falsy, and every candidate looked unregistered however many assignments had
+      // landed. The read was fine; the variable held the wrong field.
+      const identity = await call('identities', [row.address]);
       // A read that returned NOTHING is not the same as an identity that does not exist.
       // A missing identity is a zeroed struct, not an absent one, so treating the two alike
       // would list every enrolled wallet as unregistered the moment the RPC gaped -- which is

@@ -58,7 +58,7 @@ const ROLE_FILTERS = [
   { key: 'admin', label: 'Admin' },
   { key: 'manager', label: 'Manager' },
   { key: 'auditor', label: 'Auditor' },
-  { key: 'unassigned', label: 'Unassigned' },
+  { key: 'patient', label: 'Patient' },
 ];
 
 export default function AdminDashboard() {
@@ -164,7 +164,7 @@ export default function AdminDashboard() {
   const totals = stats.totals;
   const expiringSoon = stats.expiringSoon ?? [];
   const rolesAssigned = stats.identitiesByRole
-    .filter((entry) => entry.name !== 'Unassigned')
+    .filter((entry) => entry.name !== 'Patient')
     .reduce((sum, entry) => sum + entry.value, 0);
   const consentTotal = totals.activeConsents + totals.expiredConsents;
   const consentHealth =

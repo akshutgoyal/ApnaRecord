@@ -280,11 +280,14 @@ const [identityList, allEvents, labels, profiles] = await Promise.all([
     { name: 'Auditor', value: identityList.filter((i) => i.roles.auditor).length },
     { name: 'Hospital', value: identityList.filter((i) => i.roles.hospital).length },
     {
-      name: 'Unassigned',
+      // A patient is not "unassigned" -- holding no staff role is what a patient IS.
+      // Counting them as awaiting a role said the opposite of the truth: they are
+      // registered correctly and there is nothing for an administrator to do.
+      name: 'Patient',
       value: identityList.filter(
-        (i) => !i.roles.admin && !i.roles.manager && !i.roles.auditor && !i.roles.hospital
-      )
-        .length,
+        (i) =>
+          i.active && !i.roles.admin && !i.roles.manager && !i.roles.auditor && !i.roles.hospital
+      ).length,
     },
   ];
 
