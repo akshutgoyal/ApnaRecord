@@ -142,9 +142,15 @@ export default function AppShell({ children }) {
   //
   // A demo persona holds no key, so there is nothing to forget and leaving the demo is
   // the whole action. A real session is different: the sealed key lives in IndexedDB, and
-  // removing it is NOT recoverable without the recovery code. So it is confirmed rather
-  // than done on a stray click — the failure mode is somebody losing their account and
-  // only discovering it at the sign-in screen, with the console having given no warning.
+  // removing it is NOT recoverable without the recovery code — so it is confirmed.
+  //
+  // Confirmed HERE, not with `window.confirm`. That was the first version, and it failed
+  // silently: browsers suppress repeated dialogs, and a suppressed `confirm` returns false
+  // without drawing anything. So the click did nothing and said nothing — which is how
+  // "the logout button does not work" can be the only symptom you ever see. The most
+  // destructive control in the app cannot depend on a dialog the browser may swallow.
+  const [confirmLogout, setConfirmLogout] = useState(false);
+
   const logout = async () => {
     if (isDemo) {
       exitDemo();
@@ -152,17 +158,10 @@ export default function AppShell({ children }) {
       return;
     }
 
-    const confirmed = window.confirm(
-      'Log out and remove this wallet from this device?\n\n' +
-        'You will need your recovery code to sign back in. If you have not written it ' +
-        'down yet, cancel and save it first — this cannot be undone.'
-    );
-    if (!confirmed) return;
-
     try {
       await forgetDevice();
     } catch {
-      /* nothing stored to forget — still clear the marker */
+      /* nothing stored to forget — the unlocked marker still needs clearing */
     }
     clearSession();
     navigate('/access');
@@ -280,15 +279,39 @@ export default function AppShell({ children }) {
 
             {/* Sits under the identity block, with the role chip, because it is the same
                 question: which wallet am I, and how do I stop being it. */}
-            {!collapsed && (
-              <button
-                type="button"
-                onClick={logout}
-                className="btn-ghost mt-1.5 w-full justify-start px-2 py-1 text-[11px]"
-              >
-                {isDemo ? 'Exit demo' : 'Log out'}
-              </button>
-            )}
+            {!collapsed &&
+              (confirmLogout ? (
+                <div className="mt-1.5 rounded-lg border border-line bg-slate-50 p-2">
+                  <p className="text-[10px] leading-snug text-error-700">
+                    Removes this wallet from this device. You will need your recovery code
+                    to sign back in.
+                  </p>
+                  <div className="mt-1.5 flex gap-1">
+                    <button
+                      type="button"
+                      onClick={logout}
+                      className="btn-danger flex-1 px-2 py-1 text-[11px]"
+                    >
+                      Log out
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmLogout(false)}
+                      className="btn-ghost px-2 py-1 text-[11px]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => (isDemo ? logout() : setConfirmLogout(true))}
+                  className="btn-ghost mt-1.5 w-full justify-start px-2 py-1 text-[11px]"
+                >
+                  {isDemo ? 'Exit demo' : 'Log out'}
+                </button>
+              ))}
           </div>
         )}
 
