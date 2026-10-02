@@ -131,6 +131,11 @@ const EnrolmentSchema = new mongoose.Schema(
     // hygiene, and a field that is usually null still earns its place by making the
     // exceptional case visible.
     rotatedAt: { type: Date, default: null },
+
+    // What the person chose at signup. A REQUEST, not a grant -- the chain grants
+    // nothing until an administrator acts. Top level, NOT inside `identity`: it is an
+    // attribute of the enrolment, and nesting it is why the write was silently dropped.
+    requestedRole: { type: String, default: '' },
     // The verified contact binding.
     //
     // `kind` has exactly one legal value and is not a seam for anything — there is no
@@ -147,13 +152,7 @@ const EnrolmentSchema = new mongoose.Schema(
       emailMasked: { type: String, default: '' },
 
       // What the person said they were registering as. A REQUEST, not a grant: at this
-      // point they are only email-verified, and nothing on the contract has been touched.
-      // It exists so the administrator confirms a stated intention instead of guessing,
-      // and it is deliberately NOT part of the signed enrol message -- the signature
-      // proves control of the key, which says nothing about which role someone may hold.
-      // The only act that grants a role is createIdentity + grantRole, by an admin.
-      requestedRole: { type: String, default: '' },
-      verifiedAt: { type: Date, default: null },
+      // point they are only email-verified, and nothing on the contract has been touched.      verifiedAt: { type: Date, default: null },
     },
     drip: {
       amount: { type: String, default: '' },
