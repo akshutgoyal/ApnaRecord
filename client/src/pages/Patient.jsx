@@ -21,6 +21,8 @@ import {
   SkeletonRows,
   Status,
 } from '../components/ui';
+import RecordPreview from '../components/RecordPreview';
+import { previewOf, looksLikeText } from '../lib/preview';
 
 // A short option is included on purpose: watching a window expire in under a
 // minute is far more convincing than claiming that it would.
@@ -216,15 +218,20 @@ export default function Patient() {
       // giving it one would reintroduce exactly the hole this closes.
       const proof = await signRead(tokenId, account);
       const released = await releaseFile(tokenId, account, proof);
-      let plaintext = null;
+      // Decrypt to BYTES, not to a string. A scan decoded as UTF-8 does not
+      // throw — it quietly produces replacement characters, which is how the owner
+      // of a record ends up staring at mojibake where their scan should be.
+      let bytes = null;
       try {
-        plaintext = new TextDecoder().decode(
-          await decryptRecord(fromBase64(released.ciphertext), released.contentKey)
-        );
+        bytes = await decryptRecord(fromBase64(released.ciphertext), released.contentKey);
       } catch {
-        plaintext = null;
+        bytes = null;
       }
-      setViewing({ ...released, plaintext });
+      setViewing({
+        ...released,
+        bytes,
+        text: bytes && looksLikeText(bytes) ? new TextDecoder().decode(bytes) : null,
+      });
     });
 
   if (!account) {
@@ -550,14 +557,20 @@ export default function Patient() {
             <Pill tone="slate">{viewing.recordType}</Pill>
             <Pill tone="slate">digest {viewing.recordHash?.slice(0, 14)}…</Pill>
           </div>
-          {viewing.plaintext ? (
+          {viewing.bytes && previewOf(viewing.mimeType, viewing.bytes) ? (
+            <RecordPreview
+              bytes={viewing.bytes}
+              mimeType={viewing.mimeType}
+              fileName={viewing.fileName}
+            />
+          ) : viewing.text ? (
             <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-white p-3.5 text-xs leading-relaxed text-slate-700">
-              {viewing.plaintext}
+              {viewing.text}
             </pre>
           ) : (
-            <Callout tone="warn" title="Released, but not text">
-              This record was decrypted but is not readable text — most scans are images. Its digest
-              can still be verified on the Verify page.
+            <Callout tone="warn" title="Released, but not displayable here">
+              This record decrypted cleanly, but it is neither text nor a format a browser can
+              show — a DICOM, most likely. Its digest can still be verified on the Verify page.
             </Callout>
           )}
         </Card>

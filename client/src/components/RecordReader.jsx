@@ -6,6 +6,8 @@ import { decryptRecord, fromBase64, formatBytes, digestOf } from '../crypto';
 import { TX_EXPLORER } from '../contract';
 import { absoluteTime, relativeTime, humanType, shortAddress } from '../lib/format';
 import { Callout, Pill, Spinner, Status } from './ui';
+import RecordPreview from './RecordPreview';
+import { previewOf } from '../lib/preview';
 
 /**
  * The report reader.
@@ -200,18 +202,32 @@ export default function RecordReader({ tokenId, viewer, record, onBack, backLabe
             </section>
           ) : (
             <section className="rounded-lg border border-line bg-white p-3.5">
-              <h3 className="text-xs font-semibold text-ink">This record is not text</h3>
-              <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
-                The contract released it and it decrypted cleanly, but the contents are binary —
-                a scan or an image, most likely. Rendering that as text would produce nonsense, so
-                the file is offered instead.
-              </p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button type="button" onClick={download} className="btn-primary">
-                  Download {state.released.fileName || `record-${tokenId}.bin`}
-                </button>
-                <Pill tone="slate">{state.released.mimeType || 'application/octet-stream'}</Pill>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-xs font-semibold text-ink">
+                  {state.released.fileName || `Record #${tokenId}`}
+                </h3>
+                <Pill tone="success">consent verified by the contract</Pill>
                 <Pill tone="slate">{formatBytes(state.released.sizeBytes)}</Pill>
+                <button type="button" onClick={download} className="btn-secondary ml-auto text-xs">
+                  Download
+                </button>
+              </div>
+              {previewOf(state.released.mimeType, state.bytes) ? (
+                <div className="mt-3">
+                  <RecordPreview
+                    bytes={state.bytes}
+                    mimeType={state.released.mimeType}
+                    fileName={state.released.fileName}
+                  />
+                </div>
+              ) : (
+                <p className="mt-2 text-[13px] leading-relaxed text-slate-600">
+                  The contract released it and it decrypted cleanly, but this format cannot be shown
+                  in a browser — a Word document or a DICOM, most likely. The file is offered instead.
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Pill tone="slate">{state.released.mimeType || 'application/octet-stream'}</Pill>
               </div>
             </section>
           )}
