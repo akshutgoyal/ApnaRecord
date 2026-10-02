@@ -100,29 +100,48 @@
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm
            font-medium transition focus:outline-none focus-visible:ring-[3px]
            focus-visible:ring-peacock-700/70 focus-visible:ring-offset-2
-           disabled:cursor-not-allowed disabled:opacity-50;
+           disabled:cursor-not-allowed;
   }
 
+  /* Disabled: DESATURATE, do not fade.
+   *
+   * This was one blanket `disabled:opacity-50`, which dims the text along with the fill —
+   * so a filled button faded its own label into the background it sits on.
+   *
+   * Fading the fill is not a fix, and it took a contrast calculation to see why: white
+   * text needs a dark background, and a fill pale enough to read as "faded" is too pale to
+   * carry it. Peacock at 45% over paper gives white text 2.16:1 — worse than what it
+   * replaced, just tidier. A neutral slate fill gives 6.09:1 and still reads as inert,
+   * because desaturation is itself the disabled signal. Colour goes, legibility stays.
+   *
+   * The light variants never had the problem — they carry dark text, which survives being
+   * muted against white (slate-500 on slate-50 measures 5.5:1).
+   */
   .btn-primary {
-    @apply btn bg-peacock-600 text-white hover:bg-peacock-700;
+    @apply btn bg-peacock-600 text-white hover:bg-peacock-700
+           disabled:bg-slate-500 disabled:text-white disabled:hover:bg-slate-500;
   }
 
   .btn-secondary {
-    @apply btn border border-line-strong bg-white text-ink hover:bg-slate-50;
+    @apply btn border border-line-strong bg-white text-ink hover:bg-slate-50
+           disabled:border-line disabled:bg-slate-50 disabled:text-slate-500 disabled:hover:bg-slate-50;
   }
 
   .btn-danger {
-    @apply btn bg-error-600 text-white hover:bg-error-700 focus-visible:ring-error-700/70;
+    @apply btn bg-error-600 text-white hover:bg-error-700 focus-visible:ring-error-700/70
+           disabled:bg-slate-500 disabled:text-white disabled:hover:bg-slate-500;
   }
 
   .btn-ghost {
-    @apply btn text-slate-600 hover:bg-slate-100 hover:text-ink;
+    @apply btn text-slate-600 hover:bg-slate-100 hover:text-ink
+           disabled:text-slate-500 disabled:hover:bg-transparent disabled:hover:text-slate-500;
   }
 
   /* The landing page's only filled accent. Reserved for the ink shell, where
    * marigold clears AA comfortably (≈6.5:1); on paper it is fills-only. */
   .btn-accent {
-    @apply btn bg-marigold-400 text-ink-950 shadow-sticker-sm hover:brightness-[1.06];
+    @apply btn bg-marigold-400 text-ink-950 shadow-sticker-sm hover:brightness-[1.06]
+           disabled:bg-slate-500 disabled:text-white disabled:hover:brightness-100;
   }
 
   /* --------------------------------------------------------------- badges */
