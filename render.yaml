@@ -23,7 +23,35 @@ services:
         sync: false
       - key: CONTRACT_DEPLOY_BLOCK
         sync: false
-      # Uploads are wiped on every redeploy without a persistent disk. Mount one
-      # at /opt/apnarecord/uploads and uncomment, or accept re-uploads.
-      # - key: UPLOAD_DIR
-      #   value: /opt/apnarecord/uploads
+      # Must list the deployed client origin exactly, scheme included. The server
+      # refuses to boot in production without it rather than falling back to localhost.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DRIPPER_PRIVATE_KEY
+        sync: false
+      - key: DRIP_AMOUNT
+        value: "0.002"
+      - key: DRIP_FLOOR
+        value: "0.0005"
+      - key: DRIP_DAILY_CAP
+        value: "1.0"
+      - key: DRIP_LOW_WATER
+        value: "0.05"
+      # Record blobs. Without S3_BUCKET the server writes to a local directory that a
+      # redeploy wipes, leaving on-chain anchors pointing at files that no longer exist.
+      - key: S3_ENDPOINT
+        value: https://e54ba14ae4df92d7a2feb7780c607686.r2.cloudflarestorage.com
+      - key: S3_BUCKET
+        value: apnarecord
+      - key: S3_REGION
+        value: auto
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: EMAIL_PROVIDER
+        value: brevo
+      - key: EMAIL_FROM
+        value: ApnaRecord <no-reply@akshut.cyou>
+      - key: BREVO_API_KEY
+        sync: false
