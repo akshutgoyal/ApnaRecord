@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { isAddress, ZeroAddress } from 'ethers';
 import { useChain, describeError, contractError } from '../chain';
@@ -83,9 +83,21 @@ export default function Admin() {
     }
   }, [signMessage]);
 
+  /**
+   * Loaded once per account, through a ref.
+   *
+   * `loadPending` is a useCallback over `signMessage`, and this effect used to depend on
+   * it. When `signMessage`'s own identity changes -- which it does when the provider is
+   * re-created -- the effect re-fires, which sets state, which re-renders, which yields a
+   * new callback: MetaMask was asked to sign again and again, every prompt driving the
+   * next. A signed read should cost one signature per visit, so the loader is held in a
+   * ref and the effect depends on the account alone.
+   */
+  const loadPendingRef = useRef(loadPending);
+  loadPendingRef.current = loadPending;
   useEffect(() => {
-    if (account) loadPending();
-  }, [account, loadPending]);
+    if (account) loadPendingRef.current();
+  }, [account]);
 
   /**
    * Register the identity and grant the role, in the order the contract demands.
@@ -140,7 +152,11 @@ export default function Admin() {
           // the grant silently never happens: every call is signed, gas is spent, and the user is
           // left holding an identity and no role -- which is exactly what was reported.
           const contract = await readContract();
-          const constant = await contract[name]();
+          // `contract.AUDITOR_ROLE()` resolves to an ARRAY -- ethers returns the result tuple
+          // for any function with outputs, even a single one. Passing that array as the role
+          // argument encodes nonsense, so the grant silently never lands while every call is
+          // still signed, and paid for.
+          const [constant] = await contract[name]();
           const granted = await writeAs('grantRole', [constant, addr]);
           await granted.wait();
         }
