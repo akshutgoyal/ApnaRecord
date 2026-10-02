@@ -427,6 +427,15 @@ export default function Admin() {
                       <span className="text-[11px] text-slate-500">
                         {row.emailMasked || 'no email on file'}
                       </span>
+
+                      {/* What they asked to be. Shown, not applied: the buttons below are
+                          still the whole choice, because a self-declared role is a
+                          preference and the administrator is the one who decides. */}
+                      {row.requestedRole && (
+                        <span className="rounded-full bg-peacock-50 px-2 py-0.5 text-[10px] font-medium text-peacock-700">
+                          asked: {row.requestedRole}
+                        </span>
+                      )}
                     </div>
 
                     <div className="mt-2 flex flex-wrap gap-1.5">

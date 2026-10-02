@@ -90,7 +90,7 @@ export async function pendingRegistrations(req, res) {
     const rows = await EnrolmentModel.find({})
       .sort({ createdAt: -1 })
       .limit(MAX_CANDIDATES)
-      .select('address owner identity.emailMasked createdAt')
+      .select('address owner identity.emailMasked createdAt requestedRole')
       .lean();
 
     const pending = [];
@@ -103,6 +103,7 @@ export async function pendingRegistrations(req, res) {
         address: row.address,
         owner: row.owner,
         emailMasked: row.identity?.emailMasked || '',
+        requestedRole: row.requestedRole || '',
         enrolledAt: row.createdAt,
       });
     }

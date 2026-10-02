@@ -146,6 +146,15 @@ export async function enrol(req, res) {
 
   const { address, sealed, salt, iterations, timestamp, signature, grantToken } = req.body || {};
 
+  // Validated against a fixed set rather than stored as given: it is displayed to an
+  // administrator, and an unvalidated string that reaches a UI is a small attack surface
+  // for no benefit. An unknown value is dropped rather than rejected -- a bad role should
+  // not cost someone their account, and it grants nothing either way.
+  const REQUESTABLE = ['patient', 'doctor', 'auditor', 'hospital'];
+  const requestedRole = REQUESTABLE.includes(String(req.body?.requestedRole || '').toLowerCase())
+    ? String(req.body.requestedRole).toLowerCase()
+    : '';
+
   if (!ethers.isAddress(address)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }
@@ -260,6 +269,7 @@ export async function enrol(req, res) {
     let enrolment;
     try {
       enrolment = await EnrolmentModel.create({
+        requestedRole,
         address: account.address.toLowerCase(),
         owner: address.toLowerCase(),
         sealed,

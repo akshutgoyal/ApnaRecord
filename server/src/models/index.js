@@ -145,6 +145,14 @@ const EnrolmentSchema = new mongoose.Schema(
       kind: { type: String, default: 'email', enum: ['email'] },
       emailHmac: { type: String, default: '' },
       emailMasked: { type: String, default: '' },
+
+      // What the person said they were registering as. A REQUEST, not a grant: at this
+      // point they are only email-verified, and nothing on the contract has been touched.
+      // It exists so the administrator confirms a stated intention instead of guessing,
+      // and it is deliberately NOT part of the signed enrol message -- the signature
+      // proves control of the key, which says nothing about which role someone may hold.
+      // The only act that grants a role is createIdentity + grantRole, by an admin.
+      requestedRole: { type: String, default: '' },
       verifiedAt: { type: Date, default: null },
     },
     drip: {

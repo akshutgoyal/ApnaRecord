@@ -23,6 +23,12 @@ export default function Enrol() {
 
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
+
+  // What they are registering as. A REQUEST, not a grant: nothing on the contract is
+  // touched by it, and an administrator still has to confirm it. Asked here because it is
+  // information only the user has, and asking at the end -- after a wallet exists -- is how
+  // you end up with an orphaned account and no idea what it was for.
+  const [requestedRole, setRequestedRole] = useState('patient');
   const [code, setCode] = useState('');
   const [sending, setSending] = useState(false);
   // Only ever populated by the mock sender, so a demo needs no provider account.
@@ -90,6 +96,7 @@ export default function Enrol() {
 
       const created = await enrolWallet({
         address,
+        requestedRole,
         sealed: sealed.sealed,
         salt: sealed.salt,
         iterations: sealed.iterations,
@@ -485,6 +492,71 @@ export default function Enrol() {
             on the chain. It is how you find this wallet again on a new device.
           </span>
         </label>
+
+        <div>
+
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+
+            Register as
+
+          </span>
+
+          <div className="flex flex-wrap gap-2">
+
+            {[
+
+              ['patient', 'Patient'],
+
+              ['doctor', 'Doctor'],
+
+              ['auditor', 'Auditor'],
+
+              ['hospital', 'Hospital IT'],
+
+            ].map(([value, label]) => (
+
+              <button
+
+                key={value}
+
+                type="button"
+
+                aria-pressed={requestedRole === value}
+
+                onClick={() => setRequestedRole(value)}
+
+                className={`flex-1 rounded-lg border px-3 py-2 text-[11px] font-medium transition ${
+
+                  requestedRole === value
+
+                    ? 'border-peacock-300 bg-peacock-50 text-peacock-700'
+
+                    : 'border-line bg-white text-slate-600 hover:bg-slate-50'
+
+                }`}
+
+              >
+
+                {label}
+
+              </button>
+
+            ))}
+
+          </div>
+
+          <span className="mt-1 block text-[13px] leading-relaxed text-slate-500">
+
+            A request, not an instant role. An administrator confirms it on the contract, and
+
+            until they do this wallet holds nothing. Nobody can grant themselves access here,
+
+            including you.
+
+          </span>
+
+        </div>
+
 
         <div className="flex flex-wrap items-center gap-3">
           <button
