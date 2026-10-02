@@ -55,19 +55,87 @@ function blobPath(digest) {
 }
 
 // The sealed content key lives beside the blob rather than in the database, so
-// that the chain + this directory are enough to serve a record. MongoDB is then
+// that the chain + the blob store are enough to serve a record. MongoDB is then
 // genuinely a cache: switch it off and nothing is lost.
 function keyPath(digest) {
   return path.join(UPLOAD_DIR, `${cleanDigest(digest)}.key`);
 }
 
 // ------------------------------------------------------------- blob store
+//
+// Two backends, selected by configuration rather than by a flag.
+//
+//   R2 / S3     when S3_BUCKET is set. This is what a deployment must use, because a
+//               filesystem does not survive a redeploy. The chain keeps its anchors, so
+//               verification still says the file existed and was never altered — but
+//               nobody can fetch it, and the record becomes a proof of a document that
+//               exists nowhere. `render.yaml` has carried a note about this for a while.
+//
+//   filesystem  otherwise, and only locally. It is what keeps the suite running without
+//               credentials, on the same reasoning as the email mock: the real path is
+//               the default and the shortcut is impossible in production rather than
+//               simply absent.
+//
+// Both stores use the SAME keys — `<digest>.enc` for the ciphertext, `<digest>.key` for
+// the sealed content key — which is what makes the two interchangeable rather than merely
+// similar. Neither can read what it holds: the ciphertext is sealed in the browser, and
+// the content key is sealed under the master key before it is written anywhere.
+
+const S3_BUCKET = process.env.S3_BUCKET || '';
+const objectStoreConfigured = () => Boolean(S3_BUCKET);
+
+let objectStoreClient = null;
+
+async function objectStore() {
+  if (!objectStoreClient) {
+    const { S3Client } = await import('@aws-sdk/client-s3');
+    objectStoreClient = new S3Client({
+      region: process.env.S3_REGION || 'auto',
+      endpoint: process.env.S3_ENDPOINT,
+      credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+      },
+    });
+  }
+  return objectStoreClient;
+}
+
+/** Which backend is live. Surfaced so a deployment can be asked rather than assumed. */
+export function storageBackend() {
+  return objectStoreConfigured() ? 'r2' : 'filesystem';
+}
+
+export const blobKey = (digest) => `${cleanDigest(digest)}.enc`;
+export const sealedKeyKey = (digest) => `${cleanDigest(digest)}.key`;
+
+async function readFromObjectStore(key) {
+  const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+  const found = await (await objectStore()).send(
+    new GetObjectCommand({ Bucket: S3_BUCKET, Key: key })
+  );
+  return Buffer.from(await found.Body.transformToByteArray());
+}
 
 export async function putBlob(digest, buffer) {
+  if (objectStoreConfigured()) {
+    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+    // Never overwrite: the digest IS the identity of the content. The same
+    // digest means the same bytes means the stored copy is already correct.
+    try {
+      await getBlob(digest);
+      return { stored: false, reason: 'already-present' };
+    } catch {
+      /* not there yet */
+    }
+    await (await objectStore()).send(
+      new PutObjectCommand({ Bucket: S3_BUCKET, Key: blobKey(digest), Body: buffer })
+    );
+    return { stored: true };
+  }
+
   await ensureDir();
   const file = blobPath(digest);
-  // Never overwrite: the digest IS the identity of the content. Same digest
-  // means same bytes means the stored copy is already correct.
   try {
     await fs.access(file);
     return { stored: false, reason: 'already-present' };
@@ -79,10 +147,22 @@ export async function putBlob(digest, buffer) {
 }
 
 export async function getBlob(digest) {
+  if (objectStoreConfigured()) return readFromObjectStore(blobKey(digest));
   return fs.readFile(blobPath(digest));
 }
 
 export async function hasBlob(digest) {
+  if (objectStoreConfigured()) {
+    const { HeadObjectCommand } = await import('@aws-sdk/client-s3');
+    try {
+      await (await objectStore()).send(
+        new HeadObjectCommand({ Bucket: S3_BUCKET, Key: blobKey(digest) })
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
   try {
     await fs.access(blobPath(digest));
     return true;
@@ -92,11 +172,22 @@ export async function hasBlob(digest) {
 }
 
 export async function putSealedKey(digest, sealedBase64) {
+  if (objectStoreConfigured()) {
+    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+    await (await objectStore()).send(
+      new PutObjectCommand({ Bucket: S3_BUCKET, Key: sealedKeyKey(digest), Body: sealedBase64 })
+    );
+    return;
+  }
   await ensureDir();
   await fs.writeFile(keyPath(digest), sealedBase64, 'utf8');
 }
 
 export async function getSealedKey(digest) {
+  if (objectStoreConfigured()) {
+    const bytes = await readFromObjectStore(sealedKeyKey(digest));
+    return bytes.toString('utf8');
+  }
   return fs.readFile(keyPath(digest), 'utf8');
 }
 

@@ -205,6 +205,9 @@ function serverEnv(port) {
     // not depend on what happened to be exported in the terminal that launched it.
     NODE_ENV: 'test',
     EMAIL_PROVIDER: 'mock',
+    // Same reasoning as the email mock and the database name: a suite that
+    // inherits the developer's storage writes test blobs into the real bucket.
+    S3_BUCKET: '',
     PORT: String(port),
     DATABASE_URL,
     RPC_URL: CHAIN,
