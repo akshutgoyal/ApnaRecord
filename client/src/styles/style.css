@@ -122,9 +122,20 @@
            disabled:bg-slate-500 disabled:text-white disabled:hover:bg-slate-500;
   }
 
+  /* The light variants keep a visible EDGE when disabled.
+   *
+   * `disabled:bg-slate-50` on a white card is #F7F3EA against #FFFFFF — 1.03:1. The fill
+   * and the panel become the same colour, so the button stops looking like a button and
+   * reads as though it disappeared. The text was legible the whole time; it was the shape
+   * that vanished, which is worse on a form where that button IS the next step.
+   *
+   * Holding the border at `line-strong` and stepping the fill up to slate-100 keeps the
+   * control visible as a control, while the muted text still says it is not available.
+   */
   .btn-secondary {
     @apply btn border border-line-strong bg-white text-ink hover:bg-slate-50
-           disabled:border-line disabled:bg-slate-50 disabled:text-slate-500 disabled:hover:bg-slate-50;
+           disabled:border-line-strong disabled:bg-slate-100 disabled:text-slate-500
+           disabled:hover:bg-slate-100;
   }
 
   .btn-danger {
