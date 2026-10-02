@@ -201,11 +201,40 @@ export function nonceWasUnused(error) {
   return PRE_BROADCAST_ACTIONS.has(error?.action);
 }
 
+// A drip goes to an ACCOUNT CONTRACT, so a plain-transfer gas limit is wrong. Its
+// receive() pushes the cost past 21,000 and the transfer runs out of gas and
+// reverts -- after being signed, broadcast and paid for.
+//
+// This is not hypothetical. A drip estimated 21,000 while the account was still
+// deploying, the account landed mid-flight, and the transfer needed 22,827. It
+// reverted, the dripper paid for it, and the ledger recorded a successful top-up.
+//
+// Unused gas is refunded, so being generous costs nothing; being exact costs a
+// silently unfunded account.
+const DRIP_GAS_LIMIT = 60_000n;
+
 async function send(to, value) {
   const w = getWallet();
   const nonce = await claimNonce();
   try {
-    const tx = await w.sendTransaction({ to, value, nonce });
+    const tx = await w.sendTransaction({ to, value, nonce, gasLimit: DRIP_GAS_LIMIT });
+
+    // Wait, and check. A reverted transaction still has a valid hash, so returning one
+
+    // and calling it a top-up reports success for a payment that never happened --
+
+    // precisely the failure this file's header warns about, and precisely what happened:
+
+    // the ledger said the account was funded and it held nothing.
+
+    const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+
+      throw new Error(`The drip reverted on chain (${tx.hash}). No funds were sent.`);
+
+    }
+
     return tx.hash;
   } catch (error) {
     // A failure BEFORE the broadcast means the nonce was never used, so it has to go

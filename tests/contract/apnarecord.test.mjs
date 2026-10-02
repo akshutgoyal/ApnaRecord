@@ -507,7 +507,11 @@ check(
 // The window is one hour, and the contract is what closes it. A read of `canAccess`
 // now would pass even if the expiry were in the year 3000, so the chain is advanced
 // past it — the only way to prove a timeout actually times out.
-await evm.request({ method: 'evm_increaseTime', params: [3599] });
+// 3590, not 3599. ganache stamps each block with wall-clock time unless told
+  // otherwise, so real seconds accumulate across the RPC calls in between -- and at
+  // 3599 the window could close before the assertion ran, making this flaky by
+  // construction. Ten seconds of slack costs nothing and removes the race.
+  await evm.request({ method: 'evm_increaseTime', params: [3590] });
 await evm.request({ method: 'evm_mine', params: [] });
 // Still open a second short of the hour. Without this the check below would pass just
 // as happily for a window of one second, and would be proving almost nothing.
@@ -517,7 +521,7 @@ check(
   'not yet expired'
 );
 
-await evm.request({ method: 'evm_increaseTime', params: [2] });
+await evm.request({ method: 'evm_increaseTime', params: [11] });
 await evm.request({ method: 'evm_mine', params: [] });
 check(
   'and closes at the hour rather than never',
