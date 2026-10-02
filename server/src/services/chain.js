@@ -5,6 +5,7 @@ import { ethers } from 'ethers';
 import { ABI } from '../contractAbi.js';
 
 let provider = null;
+let logsProvider = null;
 let iface = null;
 
 
