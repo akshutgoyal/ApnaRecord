@@ -319,6 +319,13 @@ export default function Admin() {
         // holds the on-chain role that permits minting, and that this is the token
         // actually next in line. The digest is in the statement, so the bytes cannot
         // be swapped for different ones after signing.
+
+        // The content address, recorded both in the row and on-chain. It is a
+        // digest, not a location: the bytes may live in R2 or on disk, and the
+        // reader resolves them by recordHash. The old value claimed `local://`
+        // and truncated the digest to twelve hex characters — a lie about where
+        // it lived, and too short to identify it.
+        const cid = `sha256:${digest.slice(2)}`;
         const timestamp = Date.now();
         const signature = await signMessage(storeMessage(tokenId, mint.patient, digest, timestamp));
 
@@ -330,7 +337,7 @@ export default function Admin() {
           mimeType: mint.file.type || 'application/octet-stream',
           contentKey,
           ciphertext: toBase64(payload),
-          cid: `local://${digest.slice(2, 14)}`,
+          cid,
           timestamp,
           signature,
         });
@@ -340,7 +347,7 @@ export default function Admin() {
         const tx = await writeAs('mintRecord', [
           mint.patient,
           digest,
-          `local://${digest.slice(2, 14)}`,
+          cid,
         ]);
         await tx.wait();
         setMint({ patient: '', recordType: 'MRI_SCAN', file: null });
