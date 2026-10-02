@@ -178,6 +178,24 @@ function namedError(parsed) {
       };
     case 'IdentityExists':
       return { title: 'Already registered', detail: 'That wallet already has an identity.', code: parsed.name };
+    case 'LinkNotRequested':
+      return {
+        title: 'That link is already approved',
+        detail:
+          'There is no pending request left to accept. The link list is mirrored from the chain ' +
+          'by a background job that runs about once a minute, so a first click that looked like ' +
+          'it did nothing has very likely already succeeded. Reload to see the current state ' +
+          'rather than clicking again.',
+        code: parsed.name,
+      };
+    case 'PatientNotLinked':
+      return {
+        title: 'This hospital is not linked to that patient',
+        detail:
+          'A record can only be minted for a patient who has approved the hospital. Ask the ' +
+          'patient to approve the link first.',
+        code: parsed.name,
+      };
     case 'ERC721NonexistentToken':
       return { title: 'Record does not exist', detail: 'That token has been revoked.', code: parsed.name };
     default:
