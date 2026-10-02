@@ -164,6 +164,32 @@ export default function AppShell({ children }) {
       /* nothing stored to forget — the unlocked marker still needs clearing */
     }
     clearSession();
+
+    // An injected wallet is not something we can forget.
+    //
+    // A device key lives in IndexedDB and `forgetDevice` deletes it. MetaMask's account is
+    // simply always there — so /access redirected straight back to this console
+    // (Access.jsx sends any connected wallet holding a role to its own page), and logging
+    // out looked like it did nothing. Disconnecting has to be an actual disconnect.
+    //
+    // `wallet_revokePermissions` is the only way a page can do that. Where a wallet does
+    // not support it we say so rather than pretending: landing back here in silence is
+    // what made this look like a broken button in the first place.
+    const injected = typeof window !== 'undefined' ? window.ethereum : null;
+    if (injected?.request) {
+      try {
+        await injected.request({
+          method: 'wallet_revokePermissions',
+          params: [{ eth_accounts: {} }],
+        });
+      } catch {
+        window.alert(
+          'Logged out here, but your wallet is still connected to this site. ' +
+            'Open MetaMask and disconnect it, or switch accounts.'
+        );
+      }
+    }
+
     navigate('/access');
   };
 
