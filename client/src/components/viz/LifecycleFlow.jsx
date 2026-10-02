@@ -99,16 +99,16 @@ function Step({ step }) {
           </span>
         </div>
 
-        <p className="text-xs font-semibold leading-snug text-ink">{step.title}</p>
-        <p className="mt-1 text-[13px] leading-relaxed text-slate-500">{step.detail}</p>
+        <p className="break-words text-xs font-semibold leading-snug text-ink">{step.title}</p>
+        <p className="mt-1 break-words text-[13px] leading-relaxed text-slate-500">{step.detail}</p>
 
         {step.decision && (
           <div className="mt-2 space-y-1">
-            <p className="mono text-[10px] text-marigold-700">{step.decision.question}</p>
-            <p className="rounded border border-error-200 bg-error-50 px-1.5 py-1 text-[12px] leading-snug text-error-700">
+            <p className="mono break-words text-[10px] text-marigold-700">{step.decision.question}</p>
+            <p className="break-words rounded border border-error-200 bg-error-50 px-1.5 py-1 text-[12px] leading-snug text-error-700">
               ✕ {step.decision.no}
             </p>
-            <p className="rounded border border-success-200 bg-success-50 px-1.5 py-1 text-[12px] leading-snug text-success-700">
+            <p className="break-words rounded border border-success-200 bg-success-50 px-1.5 py-1 text-[12px] leading-snug text-success-700">
               ✓ {step.decision.yes}
             </p>
           </div>
@@ -123,7 +123,12 @@ export default function LifecycleFlow({ compact = false }) {
 
   return (
     <div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      {/* Seven columns is the shape the diagram wants — the path reads left to right — but
+          at `xl` that leaves each card about 150px, which is narrower than several of the
+          strings it has to hold (`did:ethr:<chain>:<address>`, `canAccess(tokenId, viewer)`).
+          Forcing the full row there is what made them spill. At 2xl there is room for the
+          seven, so the path only collapses to a grid when it genuinely cannot fit. */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
         {steps.map((step) => (
           <Step key={step.n} step={step} />
         ))}
