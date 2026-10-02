@@ -46,7 +46,13 @@ function DemoPicker({ open, onToggle, busy, onPick }) {
             account it belongs to. Reads and charts work; anything that writes refuses, because
             there is no wallet to sign with.
           </p>
-          {ROLE_ORDER.map((role) => (
+          {/* Admin is deliberately not offered, and neither is any role with no persona.
+              A walkthrough shows a role's own console, and the admin one is largely the
+              controls that GRANT every other role — which invites the reading that a
+              visitor could grant something. Filtering by persona as well means a role
+              added to ROLES without an address cannot appear as a button that quietly
+              does nothing, which is what the hospital entry did. */}
+          {ROLE_ORDER.filter((role) => role !== 'admin' && demoAddressFor(role)).map((role) => (
             <button
               key={role}
               type="button"

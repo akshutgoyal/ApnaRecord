@@ -316,6 +316,23 @@ export function ChainProvider({ children }) {
    */
   const writeAs = useCallback(
     async (functionName, args = [], overrides = {}) => {
+      // A persona is a reading exercise, and it must not reach a signer at all.
+      //
+      // This guard is FIRST for a reason. A persona has no session, so it fell through to
+      // the branch below, which asks `getSigner()` for one — and that returns the connected
+      // browser wallet when there is no local key. So pressing a write button in the demo
+      // did not merely fail: it signed and broadcast a REAL transaction from the visitor's
+      // own account, spending their gas on a call the persona was never authorised to
+      // make. Refusing at signing time was not enough, because the wrong signer was
+      // available. The refusal has to happen before one is looked for.
+      if (demoRoleRef.current) {
+        throw new Error(
+          'This is a demonstration. A persona holds no key, so nothing here can be signed — ' +
+            'and your connected wallet must not sign it either, because that would spend your ' +
+            'gas on a call this account was never authorised to make.'
+        );
+      }
+
       const account = sessionAddress();
 
       if (account) {
