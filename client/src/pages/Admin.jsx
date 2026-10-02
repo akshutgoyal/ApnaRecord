@@ -418,7 +418,7 @@ export default function Admin() {
             </Callout>
           )}
 
-          {pendingLoading && !pendingError && <SkeletonRows rows={2} />}
+          {pendingLoading && !pendingError && pending.length === 0 && <SkeletonRows rows={2} />}
 
           {!pendingLoading && !pendingError && pending.length === 0 && (
             <EmptyState
@@ -427,7 +427,7 @@ export default function Admin() {
             />
           )}
 
-          {pending.length > 0 && (
+          {!pendingLoading && pending.length > 0 && (
             <>
               <Field label="Facility name" hint="Used only when assigning Hospital.">
                 <input
