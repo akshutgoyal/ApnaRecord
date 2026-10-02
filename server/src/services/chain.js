@@ -7,6 +7,28 @@ import { ABI } from '../contractAbi.js';
 let provider = null;
 let iface = null;
 
+
+/**
+ * Logs may come from a different endpoint than calls, and on free tiers they must.
+ *
+ * Reading `eth_getLogs` for history needs an ARCHIVE node. Alchemy's free tier refuses
+ * the method outright; QuickNode's answers calls and concurrency perfectly but fails every
+ * historical chunk. Only the open public endpoint serves archive for free -- and it is the
+ * one that silently drops storage reads under load, which is what broke the dashboard and
+ * the pending list.
+ *
+ * Neither endpoint does both. So each does what it is good at: LOGS_RPC_URL for the scan,
+ * RPC_URL for everything else, falling back to one endpoint when only one is configured.
+ */
+export function getLogsProvider() {
+  const url = process.env.LOGS_RPC_URL || process.env.RPC_URL;
+  if (!url) throw new Error('Neither LOGS_RPC_URL nor RPC_URL is set — see server/.env.example');
+  if (!logsProvider) {
+    logsProvider = new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true });
+  }
+  return logsProvider;
+}
+
 export function getProvider() {
   if (!provider) {
     // Named for the chain it points at, not for a specific network. It was
@@ -243,7 +265,8 @@ export async function getDeployBlock() {
 export async function getAllLogs({ force = false } = {}) {
   if (!force && Date.now() - logCache.at < LOG_TTL_MS) return logCache.logs;
 
-  const provider = getProvider();
+  // History needs an archive node; free keyed endpoints refuse it. See getLogsProvider.
+  const provider = getLogsProvider();
   const address = getAddress();
   const from = await getDeployBlock();
   const latest = await provider.getBlockNumber();
