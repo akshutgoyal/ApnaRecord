@@ -162,13 +162,29 @@ console.log(`Dripper (throwaway): ${dripper.address}`);
 // had not caused. A suite whose result depends on how many times it has been run is not
 // telling you anything.
 //
-// Guarded to a local database, so pointing DATABASE_URL at something real cannot wipe it.
-if (/127\.0\.0\.1|localhost/.test(DATABASE_URL)) {
+// Guarded twice, and the second guard is the one that matters.
+//
+// "Is it localhost?" is not the question. It permits dropping any database on your own
+// machine, and DATABASE_URL is exactly the variable someone points at their dev data —
+// pointing it at a working directory and running the suite would delete it silently.
+// The NAME is what should carry the permission: only a database that calls itself a test
+// one is dropped. The worst case then is a test database that did not need clearing,
+// rather than an evening's labelling.
+const dbName = (DATABASE_URL.match(/\/([^/?]+)(\?|$)/) || [])[1] || '';
+const mayDrop = /127\.0\.0\.1|localhost/.test(DATABASE_URL) && /test/i.test(dbName);
+
+if (mayDrop) {
   const mongoose = (await import('mongoose')).default;
   await mongoose.connect(DATABASE_URL, { serverSelectionTimeoutMS: 8000 });
   await mongoose.connection.dropDatabase();
   await mongoose.disconnect();
-  console.log('Dropped the test database.');
+  console.log(`Dropped the test database (${dbName}).`);
+} else {
+  // Loud, because silently not clearing is how you get a suite that fails for a reason
+  // the last run caused — the bug this whole block exists to prevent.
+  console.log(
+    `Not dropping "${dbName}" — the name does not say "test", so this run inherits its state.`
+  );
 }
 
 start(
