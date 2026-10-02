@@ -23,6 +23,7 @@ import {
   deleteProfile,
 } from '../controllers/profileController.js';
 import { stats } from '../controllers/statsController.js';
+import { pendingRegistrations } from '../controllers/registrationController.js';
 import { enrol, getWallet, lookupWallets, requestDrip, dripperHealth, rebind, rotateRecovery } from '../controllers/walletController.js';
 import { sendCode, checkCode } from '../controllers/identityController.js';
 import {
@@ -62,6 +63,9 @@ router.post('/identity/email/verify', checkCode);
 router.post('/identities', recordIdentity);
 router.post('/facilities', recordFacility);
 router.post('/requests', recordRequest);
+
+// Who has enrolled but has no identity yet — signature-gated, because it lists masked emails.
+router.get('/admin/pending', pendingRegistrations);
 router.get('/facilities/:it', facilityDetail);
 router.get('/patients/:address/links', patientLinks);
 

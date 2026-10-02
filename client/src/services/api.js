@@ -1,3 +1,4 @@
+import { pendingMessage } from '../lib/wireMessages';
 // The browser's only door to the backend. Every page imports from here, so the
 // API surface lives in exactly one file.
 
@@ -202,3 +203,20 @@ export const verifyDigest = (tokenId, fileHash) =>
     method: 'POST',
     body: JSON.stringify({ tokenId, fileHash }),
   });
+
+/**
+ * Enrolments with no identity on chain, for the admin console.
+ *
+ * Signed, and it is the only read here that is: a masked email address is not public data.
+ * `sign` is passed in because this module holds no key — the caller has the wallet.
+ */
+export const pendingRegistrations = async (sign) => {
+  const timestamp = Date.now();
+  const signature = await sign(pendingMessage(timestamp));
+  return request('/admin/pending', {
+    headers: {
+      'x-apnarecord-timestamp': String(timestamp),
+      'x-apnarecord-signature': signature,
+    },
+  });
+};
