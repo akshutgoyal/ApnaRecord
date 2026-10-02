@@ -465,7 +465,7 @@ export default function Admin() {
                 />
               </Field>
 
-              <ul className="mt-1 space-y-2">
+              <ul className="mt-1 max-h-[25rem] space-y-2 overflow-y-auto pr-1">
                 {pending.map((row) => (
                   <li key={row.address} className="rounded-lg border border-line bg-white p-3">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -787,7 +787,7 @@ export default function Admin() {
             </p>
           )}
           {identities.length > 0 && (
-            <ul className="divide-y divide-line">
+            <ul className="max-h-[16rem] divide-y divide-line overflow-y-auto pr-1">
               {identities.map((entry) => (
                 <li key={entry.account} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
                   <div className="min-w-0 flex-1">
@@ -831,7 +831,7 @@ export default function Admin() {
         ) : events.length === 0 ? (
           <EmptyState title="No events yet" hint="Anything the contract records will appear here." />
         ) : (
-          <ol className="space-y-2">
+          <ol className="max-h-[23rem] space-y-2 overflow-y-auto pr-1">
             {events.map((event) => (
               <li
                 key={`${event.txHash}-${event.name}-${event.blockNumber}`}
