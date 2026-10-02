@@ -793,8 +793,18 @@ export function ChainProvider({ children }) {
     };
   }, [demoRole, refresh, syncAccounts]);
 
-  const isPatient = ownedRecords.length > 0;
-  const anyRole = roles.admin || roles.manager || roles.auditor || roles.hospital || isPatient;
+  // A patient is not defined by owning a record.
+  //
+  // Recognising one only through `ownedRecords.length > 0` meant a patient console could
+  // not open until something had been minted TO the patient — so a correctly registered
+  // patient was refused with "this wallet holds no role here", and the page blamed their
+  // registration for it. The evidence was already loaded and simply unused: `identity.active`
+  // is true and they hold no staff role. That is what a patient is. Owning a record is a
+  // consequence of being one, not the test for it — and it cannot be the test, because a
+  // patient has to be able to sign in and see an empty console before anything exists.
+  const isStaff = roles.admin || roles.manager || roles.auditor || roles.hospital;
+  const isPatient = !isStaff && (identity.active || ownedRecords.length > 0);
+  const anyRole = isStaff || isPatient;
 
   const primaryRole = useMemo(() => {
     if (roles.admin) return 'admin';
