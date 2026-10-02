@@ -145,6 +145,22 @@ export default function AdminDashboard() {
     );
   }
 
+  // A stale payload is not a current one.
+  //
+  // The guard above only fires when there is NO payload. If an earlier read succeeded and
+  // every read since has failed, `stats` is still populated and the cards render as though
+  // the numbers were just read. That is how an RPC outage came to be displayed as a
+  // confident "0 registered identities" — a number that disagreed with a chain holding
+  // four, and which sent us looking at roles and registrations instead of at the RPC.
+  //
+  // The payload is real; its age is not. So it says so, and the numbers stay on screen
+  // rather than being replaced by another error panel.
+  const staleNotice = error ? (
+    <Callout tone="warn" title="These numbers could not be refreshed">
+      {error} They are from the last successful read and may no longer be true.
+    </Callout>
+  ) : null;
+
   const totals = stats.totals;
   const expiringSoon = stats.expiringSoon ?? [];
   const rolesAssigned = stats.identitiesByRole
@@ -175,6 +191,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-5">
+      {staleNotice}
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="max-w-2xl">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-peacock-700">

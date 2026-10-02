@@ -89,6 +89,15 @@ export default function AuditorDashboard() {
   }
   if (error && !stats) return <EmptyPanel title="Could not read dashboard data" hint={error} />;
 
+  // A stale payload is not a current one — see the longer note in AdminDashboard. The
+  // guard above only fires with no payload at all, so a failed refresh after a successful
+  // read left these figures on screen looking newly read.
+  const staleNotice = error ? (
+    <Callout tone="warn" title="These numbers could not be refreshed">
+      {error} They are from the last successful read and may no longer be true.
+    </Callout>
+  ) : null;
+
   const observed = new Set(stats.eventsByType.map((entry) => entry.name));
   const covered = CLAIMED_EVENTS.filter((name) => observed.has(name)).length;
 
@@ -202,6 +211,7 @@ export default function AuditorDashboard() {
 
   return (
     <div className="space-y-5">
+      {staleNotice}
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="max-w-3xl">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-peacock-700">
