@@ -604,6 +604,8 @@ export async function events(limit = 100) {
     'AccessGranted',
     'AccessRevoked',
     'EmergencyAccessUsed',
+    'RoleGranted',
+    'RoleRevoked',
   ];
   const logs = await getLogsChunked();
   const out = [];

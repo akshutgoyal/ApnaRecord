@@ -6,7 +6,7 @@ Patient-owned medical records, verifiable by anyone, instantly.
 
 **Login is a wallet. A record is a soulbound token. Permission is a smart contract.**
 
-Live contract (Base Sepolia): [`0x5c50627E420ae7AFd8c4FCC522814a4A5f10dCAA`](https://sepolia.basescan.org/address/0x5c50627E420ae7AFd8c4FCC522814a4A5f10dCAA) · deploy block `47551072`
+Live contract (Base Sepolia): [`0xB6e5091f352D3d38933997d78a3585666B4EBaD0`](https://sepolia.basescan.org/address/0xB6e5091f352D3d38933997d78a3585666B4EBaD0) · deploy block `47597163`
 
 ---
 

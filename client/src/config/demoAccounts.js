@@ -17,7 +17,7 @@
 //     disagree, and the database is the one the UI shows.
 //
 // Target contract (Base Sepolia, chainId 84532):
-// 0x5c50627E420ae7AFd8c4FCC522814a4A5f10dCAA
+// 0xB6e5091f352D3d38933997d78a3585666B4EBaD0
 //
 // Hospital 101 is the first facility. Its IT wallet IS the facility on-chain.
 // (that is Phase D, with the facility console). The address is recorded here so it is not

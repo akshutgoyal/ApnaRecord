@@ -56,6 +56,13 @@ export const ABI = [
   "event AccessRevoked(uint256 indexed tokenId, address indexed viewer)",
   "event EmergencyAccessUsed(uint256 indexed tokenId, address indexed viewer, uint64 expiresAt)",
 
+  // AccessControl's own events. The audit trail is meant to carry these -- the
+  // walkthrough copy calls role grants one of "the nine events" -- but neither
+  // this ABI nor the event filter ever listed them, so every grant made through
+  // the console was invisible on the audit trail it was made from.
+  "event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)",
+  "event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)",
+
   // custom errors — without these, a revert decodes to nothing useful and every
   // failure looks like "execution reverted (unknown custom error)".
   "error NotAuthorized()",
