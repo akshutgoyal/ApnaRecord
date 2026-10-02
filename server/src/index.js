@@ -50,6 +50,16 @@ app.use((req, res, next) => {
   // server. CORS is a browser control and does not apply, so it is allowed — this
   // is also what keeps the test suite and the indexer working.
   if (origin && !allowedOrigins.includes(origin)) {
+    // Log BOTH sides, quoted. A CORS rejection is otherwise undebuggable from outside:
+    // the browser reports a network error, the API reports 403, and the one thing you
+    // need — what the server has configured versus what actually arrived — is invisible.
+    // It cost three round trips of guessing at a trailing slash when the difference could
+    // have been printed. JSON.stringify is doing real work here: it shows a trailing
+    // space, a pasted quote or a slash that an exact comparison will not forgive.
+    console.warn(
+      `[CORS] refused origin ${JSON.stringify(origin)} — configured: ` +
+        `${allowedOrigins.map((o) => JSON.stringify(o)).join(', ') || '(none)'}`
+    );
     return res.status(403).json({
       error: 'OriginNotAllowed',
       message: `Origin ${origin} may not call this API.`,
