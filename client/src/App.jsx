@@ -11,6 +11,7 @@ import Access from './pages/Access';
 import Enrol from './pages/Enrol';
 import Unlock from './pages/Unlock';
 import Admin from './pages/Admin';
+import AuditLog from './pages/AuditLog';
 import Doctor from './pages/Doctor';
 import Patient from './pages/Patient';
 import Auditor from './pages/Auditor';
@@ -110,6 +111,16 @@ function AppRoutes() {
           <RoleGate role="admin">
             <AppShell>
               <Admin />
+            </AppShell>
+          </RoleGate>
+        }
+      />
+      <Route
+        path="/admin/auditlog"
+        element={
+          <RoleGate role="admin">
+            <AppShell>
+              <AuditLog />
             </AppShell>
           </RoleGate>
         }

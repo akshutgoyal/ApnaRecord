@@ -3,9 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { isAddress, ZeroAddress } from 'ethers';
 import { useChain, describeError, contractError } from '../chain';
 import { encryptRecord, formatBytes, toBase64 } from '../crypto';
-import { chainIdentities, chainEvents, storeRecord, recordIdentity, recordFacility, pendingRegistrations } from '../services/api';
+import { chainIdentities, storeRecord, recordIdentity, recordFacility, pendingRegistrations } from '../services/api';
 import { storeMessage, identityMessage, facilityMessage } from '../lib/wireMessages';
-import { TX_EXPLORER } from '../contract';
 import { useTx } from '../hooks/useTx';
 import { useToast } from '../components/Toast';
 import AddressInput from '../components/AddressInput';
@@ -30,7 +29,6 @@ export default function Admin() {
   const { run, isBusy } = useTx({ onDone });
 
   const [identities, setIdentities] = useState([]);
-  const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
@@ -189,12 +187,8 @@ export default function Admin() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [identityResult, eventResult] = await Promise.all([
-        chainIdentities(),
-        chainEvents({ limit: 40 }),
-      ]);
-      setIdentities(identityResult.identities || []);
-      setEvents(eventResult.events || []);
+        const identityResult = await chainIdentities();
+        setIdentities(identityResult.identities || []);
     } catch (error) {
       setLoadError(describeError(error).detail || error.message);
     } finally {
@@ -819,45 +813,6 @@ export default function Admin() {
           )}
         </Card>
       </div>
-
-      <Card
-        className="mt-5"
-        title="Audit trail — the most recent events on this contract"
-        subtitle="Nobody maintains a log file. The chain is the log."
-        right={<Pill tone="slate">{events.length} shown</Pill>}
-      >
-        {loading && !events.length ? (
-          <SkeletonRows rows={5} columns={3} />
-        ) : events.length === 0 ? (
-          <EmptyState title="No events yet" hint="Anything the contract records will appear here." />
-        ) : (
-          <ol className="max-h-[23rem] space-y-2 overflow-y-auto pr-1">
-            {events.map((event) => (
-              <li
-                key={`${event.txHash}-${event.name}-${event.blockNumber}`}
-                className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-line pb-2 last:border-0 last:pb-0"
-              >
-                <Pill tone="slate">{event.name}</Pill>
-                <span className="mono text-slate-400">block {event.blockNumber}</span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-slate-600">
-                  {Object.entries(event.args)
-                    .filter(([, v]) => v !== '' && v !== null)
-                    .map(([k, v]) => `${k}=${String(v).slice(0, 22)}`)
-                    .join('  ')}
-                </span>
-                <a
-                  href={`${TX_EXPLORER}${event.txHash}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[11px] text-peacock-700 underline decoration-dotted underline-offset-2"
-                >
-                  etherscan ↗
-                </a>
-              </li>
-            ))}
-          </ol>
-        )}
-      </Card>
     </>
   );
 }

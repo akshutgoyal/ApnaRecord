@@ -25,6 +25,7 @@ const SECTIONS = {
     items: [
       { to: '/admin', label: 'Dashboard', icon: '▤', end: true },
       { to: '/admin/console', label: 'Console', icon: '⌘' },
+      { to: '/admin/auditlog', label: 'Audit trail', icon: '▦' },
     ],
   },
   doctor: {
