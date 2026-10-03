@@ -22,7 +22,7 @@ import React, {
 } from 'react';
 import { BrowserProvider, Contract, Interface, getAddress, isAddress } from 'ethers';
 import { ABI, ACCOUNT_ABI, CONTRACT_ADDRESS, CHAIN_ID } from './contract';
-import { chainPermissions, recordsByOwner } from './services/api';
+import { chainPermissions, recordsByOwner, setProofSigner, clearReadToken } from './services/api';
 import { DEMO_ACCOUNTS } from './config/demoAccounts';
 import {
   getLocalProvider,
@@ -289,6 +289,27 @@ export function ChainProvider({ children }) {
     if (!provider) throw new Error('No wallet available. Create one or connect an extension.');
     return provider.getSigner();
   }, [getReadProvider]);
+
+  /**
+   * Let the API module sign for itself.
+   *
+   * It holds no key, and threading a wallet through every call site that reads a list
+   * would touch a dozen components. So the getter is registered once, and the module asks
+   * for it only when a request must prove who is asking.
+   *
+   * Nothing signs until a gated read happens, and the token it buys is cached for its
+   * ten-minute life — so this costs one prompt per wallet per ten minutes, not one per
+   * page load.
+   */
+  useEffect(() => {
+    setProofSigner(getSigner);
+    return () => setProofSigner(null);
+  }, [getSigner]);
+
+  // A different wallet must not inherit the previous one's read token.
+  useEffect(() => {
+    clearReadToken();
+  }, [account]);
 
   /** A contract for reads: no signer, so MetaMask never prompts. */
   const readContract = useCallback(async () => {

@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { RecordModel, isDbReady } from '../models/index.js';
 import { recordMeta, tokensOf, call, verifyRecord } from '../services/chain.js';
+import { entitledPatients } from '../middleware/requireWallet.js';
 import { verifyStatement, recoverStatement } from '../lib/signature.js';
 import {
   putBlob,
@@ -57,6 +58,20 @@ export async function listRecords(req, res) {
     }
     const inScope = (patient) => !scope || (patient && scope.has(String(patient).toLowerCase()));
 
+    // Which rows may carry their off-chain fields — file name, MIME type, record type.
+    // An anonymous caller enumerating tokens is reading what the chain already publishes:
+    // an id, a digest, an owner, a block. A block explorer shows exactly that. The rest
+    // is what the contract deliberately refused to carry, and it attaches only for a
+    // viewer entitled to it.
+    //
+    // Fails CLOSED: if entitlement cannot be established, the caller gets the on-chain
+    // half. An empty Set, not null — null means "all", and a chain hiccup must never
+    // be what grants it.
+    const entitled = req.viewer
+      ? await entitledPatients(req.viewer).catch(() => new Set())
+      : new Set();
+    const maySeeOffChain = (patient) => !entitled || entitled.has(String(patient).toLowerCase());
+
     if (isDbReady()) {
       const docs = await RecordModel.find().sort({ tokenId: 1 }).lean();
       if (docs.length > 0) {
@@ -68,12 +83,18 @@ export async function listRecords(req, res) {
             .map((d) => ({
               tokenId: d.tokenId,
               patient: d.patient,
-              recordType: d.recordType,
               recordHash: d.recordHash,
-              cid: d.cid,
-              fileName: d.fileName,
-              mimeType: d.mimeType,
-              sizeBytes: d.sizeBytes,
+              // Spread only when entitled, so an anonymous caller cannot even see the keys —
+              // a null field would still tell them a file name exists.
+              ...(maySeeOffChain(d.patient)
+                ? {
+                    recordType: d.recordType,
+                    cid: d.cid,
+                    fileName: d.fileName,
+                    mimeType: d.mimeType,
+                    sizeBytes: d.sizeBytes,
+                  }
+                : {}),
               locked: true,
               // Not hardcoded. `revokeRecord` burns the token but the row stays, so a
               // constant `false` here presented revoked records as live on the browse
@@ -134,7 +155,20 @@ export async function getRecord(req, res) {
       // The token exists on-chain but this server never held the bytes.
       meta.blobMissing = true;
     }
-    return res.json({ ...meta, cached: Boolean(cached) });
+    // The same line as the list. `recordType` is off-chain — the contract deliberately
+    // refuses to carry clinical categories on a public log — so it goes only to a viewer
+    // the chain says may see this patient: the patient, an admin or auditor, or a facility
+    // linked to them. Everyone else gets the on-chain half, which a block explorer would
+    // show them anyway.
+    const { mayReadSubject } = await import('../middleware/requireWallet.js');
+    const entitledToIt = req.viewer
+      ? await mayReadSubject(req.viewer, meta.patient).catch(() => false)
+      : false;
+    
+    if (entitledToIt) return res.json({ ...meta, cached: Boolean(cached) });
+    
+    const { recordType, ...onChain } = meta;
+    return res.json({ ...onChain, cached: Boolean(cached) });
   } catch (error) {
     return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
   }

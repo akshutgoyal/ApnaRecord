@@ -34,12 +34,18 @@ import {
   patientLinks,
 } from '../controllers/directoryController.js';
 import { requireConsent } from '../middleware/consentGate.js';
+import { requireWallet, requireSubject, optionalWallet } from '../middleware/requireWallet.js';
+import { createSession } from '../controllers/authController.js';
 import { rpcProxy } from '../controllers/rpcController.js';
 
 const router = Router();
 
 // Health probe — used by the host's health check.
 router.get('/health', getHealth);
+
+// One signature, exchanged for a token the gated reads can reuse. See the controller for
+// why a per-request proof would not do.
+router.post('/auth/session', createSession);
 
 // --- Chain access, proxied ---
 //
@@ -66,8 +72,8 @@ router.post('/requests', recordRequest);
 
 // Who has enrolled but has no identity yet — signature-gated, because it lists masked emails.
 router.get('/admin/pending', pendingRegistrations);
-router.get('/facilities/:it', facilityDetail);
-router.get('/patients/:address/links', patientLinks);
+router.get('/facilities/:it', requireWallet, facilityDetail);
+router.get('/patients/:address/links', requireWallet, requireSubject('address'), patientLinks);
 
 // --- Wallet creation and funding ---
 //
@@ -88,7 +94,7 @@ router.get('/wallet/:address', getWallet);
 
 // The gas float's health. Check this before a demo: a dripper that has quietly
 // emptied is the one failure that looks like success.
-router.get('/dripper', dripperHealth);
+router.get('/dripper', requireWallet, dripperHealth);
 
 // Chain reads. No wallet, no consent, no account.
 router.get('/chain/status', chainStatus);
@@ -104,16 +110,16 @@ router.get('/stats', stats);
 // Patient-owned display profiles. Off-chain convenience data: the chain records
 // that a wallet is "Patient 101", never a name. Writes are authorised by a wallet
 // signature rather than a session, because there is no session to have.
-router.get('/profiles', listProfiles);
-router.get('/profiles/:address', getProfile);
+router.get('/profiles', requireWallet, listProfiles);
+router.get('/profiles/:address', requireWallet, requireSubject('address'), getProfile);
 router.put('/profiles/:address', upsertProfile);
 router.delete('/profiles/:address', deleteProfile);
 
 // Record index and storage. Note: /owner/:address must precede /:tokenId.
-router.get('/records', listRecords);
+router.get('/records', optionalWallet, listRecords);
 router.post('/records', storeRecord);
-router.get('/records/owner/:address', listByOwner);
-router.get('/records/:tokenId', getRecord);
+router.get('/records/owner/:address', requireWallet, requireSubject('address'), listByOwner);
+router.get('/records/:tokenId', requireWallet, getRecord);
 
 // --- Releases a record, or a reading of one. ---
 

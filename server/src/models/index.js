@@ -400,7 +400,35 @@ const RequestSchema = new mongoose.Schema(
 
 // Every export below is guarded with `mongoose.models.X ||` so `node --watch` reloads do
 // not throw OverwriteModelError.
+/**
+ * A short-lived bearer token, issued in exchange for one signature.
+ *
+ * The read proof's nonce is single-use — that is the replay guard, and it is correct —
+ * which means one proof authorises exactly one request. Gating reads on proofs alone
+ * would therefore prompt MetaMask on every page load, and a security measure that
+ * people click through without reading is not one.
+ *
+ * So: sign once, exchange for a token, reuse it until it expires. The TTL index removes
+ * expired rows, which makes the window the token's lifetime rather than something the
+ * server has to sweep.
+ *
+ * The token is opaque and random. It carries no claims, because there is nothing to
+ * claim: the viewer is a row here, and entitlement is still decided against the chain
+ * on every request. Stealing one gets an attacker the same reads they could already
+ * perform — but not the ability to act as anyone, because every write is still signed.
+ */
+const SessionSchema = new mongoose.Schema(
+  {
+    token: { type: String, required: true, unique: true },
+    viewer: { type: String, required: true },
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: true }
+);
+SessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
 export const RecordModel = mongoose.models.Record || mongoose.model('Record', RecordSchema);
+export const SessionModel = mongoose.models.Session || mongoose.model('Session', SessionSchema);
 export const FacilityModel = mongoose.models.Facility || mongoose.model('Facility', FacilitySchema);
 export const PatientLinkModel =
   mongoose.models.PatientLink || mongoose.model('PatientLink', PatientLinkSchema);

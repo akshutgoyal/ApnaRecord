@@ -6,6 +6,120 @@ import { pendingMessage } from '../lib/wireMessages';
 // by plain Node, which the test suite does in order to assert that the wire formats
 // below match the server's exactly. Vite resolves it either way.
 import { API_URL } from '../contract.js';
+import { getAddress, hexlify, randomBytes } from 'ethers';
+import { READ_DOMAIN, READ_TYPES } from '../lib/readProof.js';
+
+
+/**
+ * PROVING WHO IS ASKING, WITHOUT ASKING EVERY TIME.
+ *
+ * The server stopped serving off-chain rows to anonymous callers. There is no session
+ * cookie to carry an identity here, so the proof is the same EIP-712 statement the
+ * record release uses, with tokenId 0 meaning "not about a particular record".
+ *
+ * That proof is single-use — its nonce is spent against a unique index, which is the
+ * replay guard and is correct. Which means it cannot be the thing every read carries:
+ * a page that reads four lists would ask the wallet to sign four times on every load,
+ * and a prompt people learn to dismiss is not a control.
+ *
+ * So one signature buys a token, the token is reused until it expires, and it lives in
+ * sessionStorage — surviving a refresh, dying with the tab, and carrying no capability
+ * beyond reading. Every write is still signed per call, and entitlement is still decided
+ * against the chain on the server for each request.
+ *
+ * The signer is REGISTERED rather than passed, because passing it would mean threading a
+ * wallet through every call site that reads a list. ChainProvider calls setProofSigner
+ * once, on connect.
+ */
+const TOKEN_KEY = 'apnarecord-read-token';
+
+let proofSigner = null;
+let inFlight = null;
+
+export function setProofSigner(fn) {
+  proofSigner = typeof fn === 'function' ? fn : null;
+}
+
+const store = () => (typeof sessionStorage !== 'undefined' ? sessionStorage : null);
+
+function readToken() {
+  try {
+    const raw = store()?.getItem(TOKEN_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeToken(value) {
+  try {
+    if (value) store()?.setItem(TOKEN_KEY, JSON.stringify(value));
+    else store()?.removeItem(TOKEN_KEY);
+  } catch {
+    /* a private-mode browser with no storage still works: it just signs more often */
+  }
+}
+
+/** Drop the cached token. Called on connect, so a new wallet never inherits an old one. */
+export function clearReadToken() {
+  writeToken(null);
+}
+
+async function freshToken(signer, address) {
+  const issuedAt = Date.now();
+  const nonce = hexlify(randomBytes(32));
+  const signature = await signer.signTypedData(READ_DOMAIN, READ_TYPES, {
+    tokenId: 0,
+    viewer: address,
+    issuedAt,
+    nonce,
+  });
+
+  const response = await fetch(`${API_URL}/auth/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ viewer: address, issuedAt, nonce, signature }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.message || 'Could not establish a read session.');
+    error.code = payload.error || 'SESSION_FAILED';
+    error.status = response.status;
+    throw error;
+  }
+
+  const value = { address, token: payload.token, expiresAt: Date.parse(payload.expiresAt) };
+  writeToken(value);
+  return value;
+}
+
+async function authHeaders() {
+  if (!proofSigner) return {};
+  try {
+    const signer = await proofSigner();
+    if (!signer) return {};
+
+    const address = getAddress(await signer.getAddress());
+    const cached = readToken();
+    if (cached && cached.address === address && cached.expiresAt - 30_000 > Date.now()) {
+      return { Authorization: `Bearer ${cached.token}` };
+    }
+    clearReadToken();
+
+    // One exchange at a time. Four lists loading together must not produce four prompts.
+    if (!inFlight) {
+      inFlight = freshToken(signer, address).finally(() => {
+        inFlight = null;
+      });
+    }
+    const minted = await inFlight;
+    return { Authorization: `Bearer ${minted.token}` };
+  } catch {
+    // No proof available. The request goes unsigned, and the endpoints that need one will
+    // say so in a sentence rather than a bare 401.
+    return {};
+  }
+}
 
 async function request(path, options = {}) {
   // Headers are merged, not replaced. Spreading `options` wholesale meant that
@@ -118,9 +232,9 @@ export const recordHistory = (tokenId) => request(`/chain/records/${tokenId}/his
 // -------------------------------------------------------------- record index
 
 export const listRecords = ({ facility } = {}) =>
-  request(facility ? `/records?facility=${facility}` : '/records');
-export const getRecord = (tokenId) => request(`/records/${tokenId}`);
-export const recordsByOwner = (address) => request(`/records/owner/${address}`);
+  request(facility ? `/records?facility=${facility}` : '/records', { proof: true });
+export const getRecord = (tokenId) => request(`/records/${tokenId}`, { proof: true });
+export const recordsByOwner = (address) => request(`/records/owner/${address}`, { proof: true });
 
 /** Store a record the browser already encrypted. */
 export const storeRecord = (body) =>
@@ -167,17 +281,17 @@ export const recordFacility = (body) =>
 export const recordRequest = (body) =>
   request('/requests', { method: 'POST', body: JSON.stringify(body) });
 
-export const facilityDetail = (it) => request(`/facilities/${it}`);
+export const facilityDetail = (it) => request(`/facilities/${it}`, { proof: true });
 
-export const patientLinks = (address) => request(`/patients/${address}/links`);
+export const patientLinks = (address) => request(`/patients/${address}/links`, { proof: true });
 
 // ------------------------------------------------- patient-owned profiles
 // Off-chain display data. The chain records that a wallet is a label and owns
 // tokens; it never learns a name. Writes carry a wallet signature, because there
 // is no session to authenticate with.
 
-export const listProfiles = () => request('/profiles');
-export const getProfile = (address) => request(`/profiles/${address}`);
+export const listProfiles = () => request('/profiles', { proof: true });
+export const getProfile = (address) => request(`/profiles/${address}`, { proof: true });
 
 export const saveProfile = (address, body) =>
   request(`/profiles/${address}`, { method: 'PUT', body: JSON.stringify(body) });

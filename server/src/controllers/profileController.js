@@ -61,7 +61,18 @@ function requireDb(res) {
 export async function listProfiles(req, res) {
   if (requireDb(res)) return;
   try {
-    const profiles = await ProfileModel.find().lean();
+    // A profile is off-chain and belongs to one person: blood group, date of birth,
+    // allergies, an emergency contact. An admin or auditor reads across the platform;
+    // everyone else reads themselves and the patients of a facility they act for.
+    // Leaving this open was the worst hole in the API — enumerable by anyone with a URL.
+    const { entitledPatients } = await import('../middleware/requireWallet.js');
+    const entitled = req.viewer
+      ? await entitledPatients(req.viewer).catch(() => new Set())
+      : new Set();
+    const all = await ProfileModel.find().lean();
+    const profiles = entitled
+      ? all.filter((p) => entitled.has(String(p.account).toLowerCase()))
+      : all;
     return res.json({
       profiles: profiles.map((p) => ({
         account: p.account,
