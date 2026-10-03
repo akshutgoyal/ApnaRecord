@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { previewOf } from '../lib/preview';
 
 /**
@@ -15,16 +15,27 @@ import { previewOf } from '../lib/preview';
  */
 export default function RecordPreview({ bytes, mimeType, fileName }) {
   const preview = useMemo(() => previewOf(mimeType, bytes), [mimeType, bytes]);
+  const [url, setUrl] = useState(null);
 
-  const url = useMemo(
-    () => (preview ? URL.createObjectURL(new Blob([bytes], { type: preview.mimeType })) : null),
-    [preview, bytes]
-  );
-
+  // The URL is minted inside the effect, not memoised outside it.
+  //
+  // Memoising it made the same string on every run, and React StrictMode runs this effect
+  // twice on mount -- mount, cleanup, mount. The cleanup revoked the one and only URL, the
+  // second run produced the identical memoised value, and the <img> was left pointing at a
+  // revoked blob. The bytes were fine, the decryption was fine, and the picture was an
+  // empty box.
+  //
+  // Minting per run fixes the shape: each run owns a URL and revokes the one it made, so a
+  // double invocation leaves exactly one live URL and the element points at it.
   useEffect(() => {
-    if (!url) return undefined;
-    return () => URL.revokeObjectURL(url);
-  }, [url]);
+    if (!preview) {
+      setUrl(null);
+      return undefined;
+    }
+    const next = URL.createObjectURL(new Blob([bytes], { type: preview.mimeType }));
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [preview, bytes]);
 
   // An Office file has no inline rendering. Returning null rather than framing it is
   // deliberate: a blank <iframe> looks like a failure, and the caller can say "this one
