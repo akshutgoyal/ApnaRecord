@@ -378,13 +378,60 @@ export async function deployContract(data) {
   return { txHash: tx.hash, address };
 }
 
+const todayKey = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * What this float has sent today.
+ *
+ * Counted, not summed. Every drip is exactly AMOUNT, so the total is a count times a
+ * constant — and a count is something Mongo can increment atomically, which a wei total
+ * is not, because wei does not fit in a JavaScript number.
+ *
+ * The version this replaces summed `drip.amount` over enrolment rows whose `drip.at`
+ * was today. That field is SET on every drip rather than accumulated, so an address
+ * funded three times contributed one amount and the cap was as loose as the repeat
+ * count. Undercounting a cap is the direction that spends money.
+ */
 async function spentToday() {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const rows = await EnrolmentModel.find({ 'drip.at': { $gte: start } })
-    .select('drip.amount')
-    .lean();
-  return rows.reduce((sum, row) => sum + BigInt(row.drip?.amount || '0'), 0n);
+  const key = getWallet().address.toLowerCase();
+  const row = await DripperModel.findOne({ address: key }).lean();
+  // A count from a previous day is not today's spend, and comparing the day here means
+  // there is no scheduled reset job to forget to run.
+  if (!row || row.spentDay !== todayKey()) return 0n;
+  return BigInt(Number(row.spentCount || 0)) * AMOUNT;
+}
+
+/**
+ * Record one send against today's allowance.
+ *
+ * Two writes, because the day has to roll: the first only matches when the stored day
+ * is already today, the second resets it.
+ *
+ * A race between two instances on the first drip of a new day could reset twice and
+ * undercount by one. Accepted, and named: avoiding it needs a transaction, and the
+ * exposure is one drip on one day — against a cap that was previously looser than it
+ * claimed by exactly the repeat count.
+ */
+async function noteSpendToday() {
+  const key = getWallet().address.toLowerCase();
+  const day = todayKey();
+  try {
+    const matched = await DripperModel.updateOne(
+      { address: key, spentDay: day },
+      { $inc: { spentCount: 1 } }
+    );
+    if (matched.matchedCount === 0) {
+      await DripperModel.updateOne(
+        { address: key },
+        { $set: { spentDay: day, spentCount: 1 } },
+        { upsert: true }
+      );
+    }
+  } catch (error) {
+    // Best effort. A lost count makes the cap looser, never tighter, and refusing to
+    // drip because bookkeeping failed would be worse than the looser cap.
+    console.warn('[Dripper] Could not record the daily spend -', error.message);
+  }
 }
 
 function warnIfLow(balance) {
@@ -537,6 +584,8 @@ export async function ensureFunded(address, { reason = 'enrolment', contactHmac 
       { address: address.toLowerCase() },
       { $set: { 'drip.amount': AMOUNT.toString(), 'drip.txHash': txHash, 'drip.at': new Date() } }
     );
+
+    await noteSpendToday();
 
     console.log(`[Dripper] Sent ${ethers.formatEther(AMOUNT)} ETH to ${address} (${txHash})`);
     return { ok: true, skipped: false, txHash, amountEth: ethers.formatEther(AMOUNT) };

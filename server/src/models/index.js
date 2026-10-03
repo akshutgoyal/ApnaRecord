@@ -340,6 +340,14 @@ const DripperSchema = new mongoose.Schema(
     // or the $inc that maintains them would silently do nothing.
     inFlight: { type: Number, default: 0 },
     inFlightAt: { type: Date, default: null },
+
+    // What this float has sent today, as a COUNT rather than a wei total.
+    // Every drip is exactly one AMOUNT, and wei does not fit in a JavaScript
+    // number — so a running total would be a decimal string Mongo cannot increment
+    // atomically, while a count can be incremented and multiplied by AMOUNT at read
+    // time. `spentDay` is the YYYY-MM-DD the count belongs to.
+    spentDay: { type: String, default: '' },
+    spentCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
