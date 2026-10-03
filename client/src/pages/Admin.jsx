@@ -24,7 +24,7 @@ import {
 const RECORD_TYPES = ['MRI_SCAN', 'BLOOD_PANEL', 'XRAY', 'DISCHARGE_SUMMARY', 'PRESCRIPTION'];
 
 export default function Admin() {
-  const { account, roles, readContract, writeAs, simulateAs, signMessage, refresh } = useChain();
+  const { account, roles, readContract, writeAs, simulateAs, signMessage, refresh, isDemo } = useChain();
   const toast = useToast();
   const onDone = useCallback(() => refresh(), [refresh]);
   const { run, isBusy } = useTx({ onDone });
@@ -72,6 +72,20 @@ export default function Admin() {
   const loadPending = useCallback(async () => {
     setPendingLoading(true);
     setPendingError(null);
+
+    // This list is the app's only signed read, because it carries masked email addresses.
+    // A persona holds no key, so asking would post a body with no signature and the server
+    // would answer 400 — which reads like a fault in the console rather than the
+    // demonstration behaving as designed.
+    if (isDemo) {
+      setPending([]);
+      setPendingError(
+        'This list is signed, because it carries masked email addresses — and a demo persona holds no key. Connect a real admin wallet to read it. Everything else on this page is live chain data.'
+      );
+      setPendingLoading(false);
+      return;
+    }
+
     try {
       const result = await pendingRegistrations((message) => signMessage(message));
       setPending(result.pending || []);
