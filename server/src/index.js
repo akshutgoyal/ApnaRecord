@@ -133,6 +133,17 @@ async function startServer() {
     console.log('');
     console.log(`  contract      ${process.env.CONTRACT_ADDRESS || '(CONTRACT_ADDRESS not set)'}`);
     console.log(`  rpc           ${process.env.RPC_URL || '(RPC_URL not set)'}`);
+    // Which backend holds the bytes. Chosen by whether S3_BUCKET is set, and captured
+    // at module load — so this line is the only place a misconfiguration is visible
+    // before it becomes "this server does not hold its bytes" on a read.
+    console.log(`  storage       ${process.env.S3_BUCKET ? `r2/s3 — ${process.env.S3_BUCKET}` : 'local disk (server/uploads)'}`);
+    if (!process.env.S3_BUCKET && process.env.NODE_ENV === 'production') {
+      console.warn(
+        '  [storage] S3_BUCKET is not set in production. Records are being written to local ' +
+          'disk, which most hosts discard on the next deploy — and a read then fails as ' +
+          '"this server does not hold its bytes", which points at the wrong machine.'
+      );
+    }
     console.log(
       `  master key    ${process.env.MASTER_KEY ? 'set' : 'MISSING — record uploads will fail'}`
     );

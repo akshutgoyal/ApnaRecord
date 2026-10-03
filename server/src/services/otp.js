@@ -79,7 +79,14 @@ export async function requestCode(rawContact, purpose = 'enrol') {
       });
     }
   }
-  if (recent.length >= MAX_CODES_PER_HOUR) {
+  // Counted through the rate limiter, NOT from the OTP rows above.
+  //
+  // Those rows carry a TTL of CODE_TTL_MS — five minutes — so a query asking for the
+  // last hour can only ever see five minutes' worth, and "five per hour" was really
+  // "five per five minutes": twelve times the intended rate. The limiter's own rows
+  // expire at the end of the window they belong to, so the count and the window mean
+  // the same thing at last.
+  if (!(await noteHit('otp-contact', hmac, MAX_CODES_PER_HOUR, 60 * 60 * 1000))) {
     throw Object.assign(
       new Error('Too many codes requested for that address. Try again in an hour.'),
       { code: 'TooManyRequests' }
