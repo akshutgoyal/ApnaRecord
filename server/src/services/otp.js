@@ -14,6 +14,7 @@
 // be re-requested instantly, and are capped per contact per hour.
 
 import { OtpModel, ContactGrantModel, isDbReady } from '../models/index.js';
+import { noteHit } from '../lib/rateLimit.js';
 import { normaliseEmail, emailHmac, maskEmail } from '../lib/email.js';
 import {
   generateCode,
