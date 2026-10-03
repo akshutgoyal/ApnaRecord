@@ -33,10 +33,17 @@ const DEFAULT_DEV_ORIGINS = [
 
 const allowedOrigins = corsOrigins.length > 0 ? corsOrigins : DEFAULT_DEV_ORIGINS;
 
-// Every signing proof this API accepts travels in a header, so the preflight has to
-// name them or the browser will refuse to send them.
+// Every proof this API accepts travels in a header, so the preflight has to name them
+// or the browser will refuse to send them. The failure is silent from the server's side
+// -- the request never arrives -- and the client reports it as "could not reach the API",
+// which points at the network rather than at a missing word in this list.
+//
+// `Authorization` carries the read token, which replaced a per-call signature. It was
+// added to the client and not to this list, so every gated read failed its preflight on
+// every origin at once. Anything the client sends in a header belongs here.
 const ALLOWED_HEADERS = [
   'Content-Type',
+  'Authorization',
   'x-apnarecord-viewer',
   'x-apnarecord-issued-at',
   'x-apnarecord-nonce',
