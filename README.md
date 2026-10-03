@@ -39,7 +39,7 @@ for free, without trusting us.**
 | **Contract** | Solidity 0.8.24, OpenZeppelin ERC-721 + AccessControl, ERC-5192 soulbound. Deployed and live on Base Sepolia |
 | **Frontend** | React 18 + Vite 6 + Tailwind 3 + ethers v6 — one console per role |
 | **Backend** | Express 4 + Mongoose 8 — serves ciphertext, indexes the chain |
-| **Storage** | Encrypted blobs on disk, behind an interface that IPFS drops into |
+| **Storage** | Encrypted blobs in Cloudflare R2 (S3-compatible), with a local-disk fallback when `S3_BUCKET` is unset |
 
 ### What the dashboards do
 
@@ -176,7 +176,7 @@ any single one of them agreeing with the others.
 | Store | Holds | Why |
 |---|---|---|
 | **Blockchain** | Owner, roles, the 32-byte record digest, consent windows, every event | Truth. Public, immutable, tamper-proof. If anything disagrees with the chain, the chain wins. |
-| **Server (disk)** | The encrypted file and its sealed content key | The file itself has no business on a ledger. A 500 MB scan costs the same on-chain as a text file. |
+| **Object storage** | The encrypted file and its sealed content key | The file itself has no business on a ledger. A 500 MB scan costs the same on-chain as a text file. Records are private and released only through the contract, so the bytes are addressed by digest rather than published to a content-addressed network. |
 | **MongoDB** | A browse index of identities, records, events, links and requests, plus patient-chosen display names | Speed only — except the names, labels, links and request contents, which live ONLY here. The chain-derived rows can be dropped and rebuilt from logs at any time; the directory rows cannot. |
 
 > **Mongo answers quickly. The chain answers truthfully.**
@@ -395,8 +395,9 @@ Encryption is **browser-side only**. Nothing trusts the server with plaintext:
    each other in `server/uploads/` (override with `UPLOAD_DIR`): `<digest>.enc`
    (ciphertext) and `<digest>.key` (the content key sealed under `MASTER_KEY` as
    `iv(12) | tag(16) | ciphertext`, base64). Uploads are capped at 20 MB per record.
-3. **Mint (contract).** The admin's `mintRecord(patient, digest, cid, recordType)` anchors
-   only the digest. The plaintext was never on the wire.
+3. **Mint (contract).** The admin's `mintRecord(patient, digest, cid)` anchors only the
+   digest. The plaintext was never on the wire, and the record's *type* does not go on-chain
+   either — a category is clinical information, so it stays with the server row.
 4. **Read (gated).** `GET /api/records/:tokenId/file?viewer=X` runs `eth_call
    viewRecord(tokenId) { from: viewer }` **before touching disk**
    (`server/src/middleware/consentGate.js` — the contract answers, the server never
@@ -426,8 +427,8 @@ CONTRACT_ADDRESS=
 CONTRACT_DEPLOY_BLOCK=
 
 DRIPPER_PRIVATE_KEY=                    # npm run dripper:new — fund the address it prints
-DRIP_AMOUNT=0.01                        # per new account. ~100 writes at 2 gwei
-DRIP_FLOOR=0.003                        # top up only when an account falls below this
+DRIP_AMOUNT=0.002                       # per new wallet. L2 gas, so hundreds of writes each
+DRIP_FLOOR=0.0005                       # top up only when a wallet falls below this
 DRIP_DAILY_CAP=1.0                      # circuit breaker, per calendar day
 DRIP_LOW_WATER=0.05                     # warn loudly below this
 
@@ -444,7 +445,14 @@ CONTACT_MAX_PER_IP=12                  # codes per caller IP per hour
 CONTACT_MAX_PER_HOUR=5                 # codes per address per hour
 CONTACT_RESEND_COOLDOWN_MS=30000       # minimum gap between requests for one address
 
-# UPLOAD_DIR=                           # defaults to server/uploads
+# Object storage (S3-compatible). S3_BUCKET is the switch: set it and blobs go to
+# the bucket, leave it unset and they fall back to UPLOAD_DIR.
+S3_BUCKET=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+S3_ENDPOINT=                            # https://<account-id>.r2.cloudflarestorage.com
+S3_REGION=auto
+# UPLOAD_DIR=                           # only when S3_BUCKET is blank
 ```
 
 > **On email delivery.** Transactional email needs a relay authenticated for the sending
@@ -578,9 +586,9 @@ answer.
 - **An email address is the only locator.** Lose the address *and* the recovery code and the
   wallet is gone. Recovery needs a second address, a second code, or a guardian quorum, none
   of which is built. The schema and the grants are shaped to accept them.
-- **OTP rate limits are per-process and in-memory.** A restart clears them, and two server
-  instances do not share them. A real deployment needs a shared store and a WAF in front,
-  because mail bombing is a billing attack rather than a security one.
+- **OTP rate limits live in the database**, so a restart does not clear them and two instances
+  share them. What is still missing is a WAF in front: mail bombing is a billing attack rather
+  than a security one, and the app-level cap is the wrong layer for it.
 - **Losing the recovery code loses the records.** The wallet is a plain EOA, not a smart
   account, so there is no signer to rotate — and because the record is soulbound it cannot
   be moved to a new address either. One secret, no recovery. The designed fix (a rotatable
@@ -593,9 +601,9 @@ answer.
 - **The dripper's key sits on the server.** It cannot sign as anyone — only send test ETH —
   but on a network where the balance had value it would be a honeypot. It is testnet-only
   by construction.
-- **The read proof's replay guard is in-memory**, so it is per-process and cleared by a
-  restart. The five-minute validity window is the real bound. A durable store is the answer
-  the day this runs on more than one instance.
+- **The read proof's replay guard is database-backed.** Each nonce is spent against a unique
+  index, so a captured proof is refused once and stays refused across restarts and across
+  instances. Verified by replaying the same proof before and after a restart.
 - **Emergency break-glass bypasses consent by design** — one hour, one record, and the
   reason is permanently on-chain.
 - **In this demo the key wrapping is handled by the backend.** Each record has its own
@@ -611,8 +619,11 @@ answer.
 - **The demo walkthrough cannot read records.** A persona holds no key, so it cannot sign a
   read proof. Dashboards, charts and metadata all still work — only the file reader stops,
   and it explains why rather than failing silently.
-- `local://` appears as the record location. Real deployments use IPFS; the storage layer
-  is written so that is a swap rather than a rewrite.
+- **The record's location string is not a real address.** Records minted before the format
+  settled carry `local://<digest prefix>`, and later ones carry `sha256:<full digest>`. Neither
+  is used to fetch anything — reads resolve the digest against the configured bucket — so the
+  label is provenance for a human, not a pointer. One legacy record still displays the older
+  form, and the chain will not let it be changed.
 - This is a **testnet demo with synthetic data**. No real patient data is involved.
 
 ---
@@ -673,10 +684,24 @@ package.json                    root scripts: dev:client · dev:server · start:
 
 | Group | Functions |
 |---|---|
-| Identity | `createIdentity` · `deactivateIdentity` · `didFor` |
-| Records | `requestRecord` (Manager) · `mintRecord` (Admin) · `revokeRecord` (Admin) |
-| Consent | `grantAccess` · `revokeAccess` (owner) · `emergencyAccess` (Manager, 1 hour, logged) |
+| Identity | `createIdentity` (Admin) · `deactivateIdentity` (Admin) · `didFor` |
+| Records | `requestRecord()` (Manager) · `mintRecord(address,bytes32,string)` (Admin) · `revokeRecord(uint256)` (Admin) |
+| Consent | `grantAccess(uint256,address,uint64)` · `revokeAccess` (the owner) · `emergencyAccess(uint256,address)` (Manager — one hour, logged) |
+| Facilities | `createFacility` (Admin) · `facilityOf` · the patient-link lifecycle: `requestPatientLink` · `approvePatientLink` · `revokePatientLink` |
 | Reads | `canAccess` · `viewRecord` · `verifyRecord` · `auditRecord` · `locked` |
+
+**Thirteen events, ten errors.** Every declared error is reachable from at least one path —
+which is the check that a contract's failures are real rather than decorative:
+
+```
+events   IdentityCreated · IdentityDeactivated · RoleGranted · FacilityCreated
+         PatientLinkRequested · PatientLinked · PatientUnlinked
+         RecordRequested · RecordMinted · Locked · RecordRevoked
+         AccessGranted · AccessRevoked · EmergencyAccessUsed
+
+errors   NotAuthorized · IdentityExists · IdentityNotFound · RecordNotFound
+         AccessDenied · Expired · OnlyThePatient · LinkNotRequested
+         NotAFacility · PatientNotLinked
 
 **Compiling it yourself? Set the EVM version to Cancun.** Solidity 0.8.24 defaults to the
 older `shanghai` target, while current OpenZeppelin releases use the `mcopy` instruction,
