@@ -44,3 +44,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Editor and tooling state — never part of the project
+.commandcode/
