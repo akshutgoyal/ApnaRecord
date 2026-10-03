@@ -484,6 +484,14 @@ export default function Admin() {
                           asked: {row.requestedRole}
                         </span>
                       )}
+                      {/* Which half is done. This row used to vanish the moment its identity landed,
+                          which hid the case that needs an operator most: identity granted, role not. */}
+                      {row.missing && row.missing.length > 0 && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                          {row.identityActive ? 'identity ok' : 'identity missing'} ·{' '}
+                          {row.roleGranted === true ? 'role ok' : row.missing.includes('role') ? 'role missing' : 'no role needed'}
+                        </span>
+                      )}
                     </div>
 
                     <div className="mt-2 flex flex-wrap gap-1.5">
@@ -513,7 +521,7 @@ export default function Admin() {
                               {assigning === row.address + role ? (
                                 <Busy label={role} />
                               ) : primary ? (
-                                `Approve as ${role}`
+                                row.identityActive ? `Grant ${role}` : `Approve as ${role}`
                               ) : (
                                 role
                               )}

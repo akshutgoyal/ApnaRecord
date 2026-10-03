@@ -115,7 +115,30 @@ export async function pendingRegistrations(req, res) {
       // ABI names its struct components; reading the wrong one yields undefined, which is
       // falsy, so every candidate looked unregistered and the list never cleared however
       // many assignments had landed.
-      if ((identity.active ?? identity[1] ?? false)) continue;
+      // A wallet with an identity but no role is the case that needs the operator most,
+      // and it was the one the panel hid: the row disappeared at the exact moment it became
+      // half-finished. So instead of skipping anyone with an identity, the row is kept and
+      // told which half is missing.
+      const active = Boolean(identity.active ?? identity[1] ?? false);
+      const missing = [];
+      if (!active) missing.push('identity');
+      
+      const ROLE_FOR = { doctor: 'MANAGER_ROLE', auditor: 'AUDITOR_ROLE', hospital: 'HOSPITAL_ROLE' };
+      let roleGranted = null;
+      if (active && ROLE_FOR[row.requestedRole]) {
+        try {
+          const [roleValue] = await call(ROLE_FOR[row.requestedRole]);
+          const [held] = await call('hasRole', [roleValue, row.address]);
+          roleGranted = Boolean(held);
+          if (!held) missing.push('role');
+        } catch {
+          // Could not ask. Say so rather than assuming either answer.
+          roleGranted = null;
+        }
+      }
+      
+      // Nothing left to do, so it is not waiting on anyone.
+      if (missing.length === 0) continue;
 
       pending.push({
         address: row.address,

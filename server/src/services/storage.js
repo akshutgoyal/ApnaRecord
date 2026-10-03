@@ -81,8 +81,14 @@ function keyPath(digest) {
 // similar. Neither can read what it holds: the ciphertext is sealed in the browser, and
 // the content key is sealed under the master key before it is written anywhere.
 
-const S3_BUCKET = process.env.S3_BUCKET || '';
-const objectStoreConfigured = () => Boolean(S3_BUCKET);
+// Read per call, not captured at import.
+//
+// As a module-level const this was fixed at load, so anything importing this file
+// before dotenv ran saw an empty bucket — and silently fell back to local disk. The
+// failure that produces is a read reporting "this server does not hold its bytes",
+// which points at the deployment rather than at the import order that caused it.
+const bucket = () => process.env.S3_BUCKET || '';
+const objectStoreConfigured = () => Boolean(bucket());
 
 let objectStoreClient = null;
 
@@ -112,7 +118,7 @@ export const sealedKeyKey = (digest) => `${cleanDigest(digest)}.key`;
 async function readFromObjectStore(key) {
   const { GetObjectCommand } = await import('@aws-sdk/client-s3');
   const found = await (await objectStore()).send(
-    new GetObjectCommand({ Bucket: S3_BUCKET, Key: key })
+    new GetObjectCommand({ Bucket: bucket(), Key: key })
   );
   return Buffer.from(await found.Body.transformToByteArray());
 }
@@ -129,7 +135,7 @@ export async function putBlob(digest, buffer) {
       /* not there yet */
     }
     await (await objectStore()).send(
-      new PutObjectCommand({ Bucket: S3_BUCKET, Key: blobKey(digest), Body: buffer })
+      new PutObjectCommand({ Bucket: bucket(), Key: blobKey(digest), Body: buffer })
     );
     return { stored: true };
   }
@@ -156,7 +162,7 @@ export async function hasBlob(digest) {
     const { HeadObjectCommand } = await import('@aws-sdk/client-s3');
     try {
       await (await objectStore()).send(
-        new HeadObjectCommand({ Bucket: S3_BUCKET, Key: blobKey(digest) })
+        new HeadObjectCommand({ Bucket: bucket(), Key: blobKey(digest) })
       );
       return true;
     } catch {
@@ -175,7 +181,7 @@ export async function putSealedKey(digest, sealedBase64) {
   if (objectStoreConfigured()) {
     const { PutObjectCommand } = await import('@aws-sdk/client-s3');
     await (await objectStore()).send(
-      new PutObjectCommand({ Bucket: S3_BUCKET, Key: sealedKeyKey(digest), Body: sealedBase64 })
+      new PutObjectCommand({ Bucket: bucket(), Key: sealedKeyKey(digest), Body: sealedBase64 })
     );
     return;
   }
