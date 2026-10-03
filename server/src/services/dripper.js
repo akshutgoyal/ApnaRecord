@@ -99,80 +99,136 @@ function serialise(task) {
  */
 let seeded = false;
 
-async function claimNonce() {
-  const w = getWallet();
-  const key = w.address.toLowerCase();
-
-  // `$setOnInsert` and nothing else. If the document exists we trust it, because it is
-  // only ever advanced by one, immediately before a send that is about to happen.
-  if (!seeded) {
-    const onChain = await w.provider.getTransactionCount(w.address, 'pending');
-    await DripperModel.updateOne(
-      { address: key },
-      { $setOnInsert: { address: key, nextNonce: onChain } },
-      { upsert: true }
-    );
-    seeded = true;
-  }
-
-  // NOTE — why there is no "reconcile against the chain" step here.
-  //
-  // It is tempting. After an ambiguous failure the counter sits one ahead of what the
-  // node has, and because nonces are sequential that single skipped value stalls every
-  // drip behind it, so rewinding to the node's count would heal it.
-  //
-  // It is also unsafe, and the two-instance suite proves it. Any guard for it has to be
-  // per-process, but the counter is shared across processes: one server can be mid-send —
-  // so the node still counts below the counter — while another concludes the counter is
-  // ahead and rewinds it. Both then claim the same nonce, which is the reuse this file
-  // exists to prevent, and a process-local guard cannot see the other process's claim.
-  //
-  // Doing it correctly needs the in-flight count to live in the shared document. That is
-  // a larger change than this fix, so the gap is accepted deliberately — and it is the
-  // cheaper of the two failures. A gap stalls drips visibly; a reused nonce loses funds
-  // silently while the ledger records a hash. Recovering from a gap is a one-off reset of
-  // the counter document.
-
-  // `new: false` returns the document as it was BEFORE the increment, which is the
-  // nonce being claimed. Two callers racing here get different values, because $inc
-  // is atomic.
-  const claimed = await DripperModel.findOneAndUpdate(
-    { address: key },
-    { $inc: { nextNonce: 1 } },
-    { new: false, lean: true }
-  );
-
-  if (!claimed) {
-    throw new Error('Could not claim a nonce — the dripper counter document is missing.');
-  }
-  return claimed.nextNonce;
-}
-
-/**
- * Give a nonce back after a send that never reached the node.
- *
- * A claimed nonce that is never broadcast is exactly the gap the comment above warns
- * about, so it has to be handed back rather than abandoned. The update is a
- * compare-and-swap: it only applies while the counter is still immediately after our
- * claim. If anything else has claimed since, reclaiming would collide with it, and a
- * rare real gap beats a reused nonce.
- */
-async function releaseNonce(nonce) {
-  try {
+  async function claimNonce() {
     const w = getWallet();
-    await DripperModel.updateOne(
-      { address: w.address.toLowerCase(), nextNonce: nonce + 1 },
-      { $set: { nextNonce: nonce } }
-    );
-  } catch (error) {
-    // Releasing is best-effort. Failing here must not mask the send error that caused
-    // it, which is the one worth reporting.
-    console.warn('[Dripper] Could not release nonce', nonce, '-', error.message);
-  }
-}
+    const key = w.address.toLowerCase();
 
-/**
- * Failures we can positively place BEFORE the transaction reached the node.
+    // `$setOnInsert` and nothing else. If the document exists we trust it, because it is
+    // only ever advanced by one, immediately before a send that is about to happen.
+    if (!seeded) {
+      const onChain = await w.provider.getTransactionCount(w.address, 'pending');
+      await DripperModel.updateOne(
+        { address: key },
+        { $setOnInsert: { address: key, nextNonce: onChain, inFlight: 0 } },
+        { upsert: true }
+      );
+      seeded = true;
+    }
+
+    // Before claiming, heal a counter that sits ahead of the chain.
+    //
+    // This is the reconciliation the comment below used to explain why it was absent. It
+    // is safe now for one reason: the in-flight count is in the SHARED document, so
+    // "nobody is mid-send anywhere" is a fact any instance can establish, where a
+    // process-local guard could only ever speak for itself.
+    await reconcileNonce(key);
+
+    // `$inc` both, atomically. `new: false` returns the document as it was BEFORE the
+    // increment, which is the nonce being claimed — and because in-flight was raised in
+    // the same operation, no reconciler anywhere can rewind this claim out from under us.
+    const claimed = await DripperModel.findOneAndUpdate(
+      { address: key },
+      { $inc: { nextNonce: 1, inFlight: 1 }, $set: { inFlightAt: new Date() } },
+      { new: false, lean: true }
+    );
+
+    if (!claimed) {
+      throw new Error('Could not claim a nonce — the dripper counter document is missing.');
+    }
+    return claimed.nextNonce;
+  }
+
+  /**
+   * Settle a claim, and optionally hand the nonce back.
+   *
+   * Every claim reaches here exactly once: on success, on a pre-broadcast failure, and on
+   * an ambiguous one. The in-flight decrement is unconditional, because the send is over
+   * in all three cases — leaving it raised would block reconciliation for good, and a
+   * counter that can never be healed is worse than one that needs healing.
+   *
+   * The rewind is the part that must stay conditional. A claimed nonce that was never
+   * broadcast is the permanent gap that stalls everything after it, so it goes back — but
+   * only while the counter is still immediately after our claim. If anything has claimed
+   * since, reclaiming would collide with it, and a rare real gap beats a reused nonce.
+   */
+  async function settleNonce(nonce, { unused = false } = {}) {
+    const w = getWallet();
+    const key = w.address.toLowerCase();
+    try {
+      // `$gt: 0` because a document written before this field existed has no inFlight,
+      // and Mongo would treat a missing field as 0 and decrement it to -1.
+      await DripperModel.updateOne(
+        { address: key, inFlight: { $gt: 0 } },
+        { $inc: { inFlight: -1 } }
+      );
+
+      if (unused) {
+        await DripperModel.updateOne(
+          { address: key, nextNonce: nonce + 1 },
+          { $set: { nextNonce: nonce } }
+        );
+      }
+    } catch (error) {
+      // Settling is best-effort. Failing here must not mask the send error that caused
+      // it, which is the one worth reporting.
+      console.warn('[Dripper] Could not settle nonce', nonce, '-', error.message);
+    }
+  }
+
+  /**
+   * Pull the counter back to the chain when it has run ahead and nothing is in flight.
+   *
+   * Why the chain can be behind: a claim is made before the send, and a failure at the
+   * broadcast is ambiguous — the node may or may not be holding the transaction. The
+   * nonce stays spent, correctly, and the counter ends up one ahead of anything the node
+   * has seen. Nonces are sequential, so that one skipped value stalls every drip behind
+   * it permanently.
+   *
+   * Why this is safe now: the guard is `inFlight: 0` IN THE UPDATE ITSELF, not in a read
+   * before it. A claim landing between our read and our write raises inFlight and sets
+   * nextNonce forward in the same atomic operation, so the condition fails and nothing is
+   * undone. Two instances cannot both conclude "quiet" while one is mid-send, which is
+   * the reuse the process-local version caused.
+   *
+   * A crashed process leaves inFlight raised with nothing to settle it, so a claim older
+   * than STALE_CLAIM_MS is treated as abandoned. The direction of the guess matters: a
+   * nonce wrongly considered settled only blocks a rewind, while one wrongly considered
+   * in-flight would let a rewind happen under a live send.
+   */
+  const STALE_CLAIM_MS = 10 * 60 * 1000;
+
+  async function reconcileNonce(key) {
+    try {
+      const doc = await DripperModel.findOne({ address: key }).lean();
+      if (!doc || !doc.nextNonce) return;
+
+      const inFlight = Number(doc.inFlight || 0);
+      const claimAge = doc.inFlightAt ? Date.now() - new Date(doc.inFlightAt).getTime() : null;
+      // A claim that is still young might be a live send anywhere on the fleet.
+      if (inFlight > 0 && claimAge !== null && claimAge < STALE_CLAIM_MS) return;
+
+      const w = getWallet();
+      const onChain = await w.provider.getTransactionCount(w.address, 'pending');
+      if (onChain >= doc.nextNonce) return;
+
+      const rewound = await DripperModel.updateOne(
+        { address: key, inFlight: { $lte: 0 }, nextNonce: { $gt: onChain } },
+        { $set: { nextNonce: onChain } }
+      );
+      if (rewound.modifiedCount) {
+        console.warn(
+          `[Dripper] Rewound the nonce counter from ${doc.nextNonce} to ${onChain} — ` +
+            'nothing was in flight, so the value between them was never sent.'
+        );
+      }
+    } catch (error) {
+      // Could not reach the chain. Claiming still works; it just skips the heal.
+      console.warn('[Dripper] Could not reconcile the nonce counter -', error.message);
+    }
+  }
+
+  /**
+   * Failures we can positively place BEFORE the transaction reached the node.
  *
  * Only these hand the nonce back. Anything else — a broadcast the node may have accepted,
  * or an error with no `action` at all — leaves the nonce spent.
@@ -216,8 +272,24 @@ const DRIP_GAS_LIMIT = 60_000n;
 async function send(to, value) {
   const w = getWallet();
   const nonce = await claimNonce();
+
+  // Settle exactly once per claim. In-flight means "claimed but not yet broadcast", so
+  // it comes down on success as well as failure — and the paths below can overlap, so
+  // the flag is what stops a double decrement.
+  let settled = false;
+  const settle = async (unused) => {
+    if (settled) return;
+    settled = true;
+    await settleNonce(nonce, { unused });
+  };
+
   try {
     const tx = await w.sendTransaction({ to, value, nonce, gasLimit: DRIP_GAS_LIMIT });
+
+    // Broadcast. The nonce is spent now whatever happens next, so settle with nothing
+    // to hand back — and do it before the wait, because a wait that throws still had a
+    // live transaction behind it.
+    await settle(false);
 
     // Wait, and check. A reverted transaction still has a valid hash, so returning one
 
@@ -253,9 +325,7 @@ async function send(to, value) {
     //
     // So the test is inverted: release only on an action known to be pre-broadcast.
     // Being wrong in this direction costs a gap; being wrong the other way costs money.
-    if (nonceWasUnused(error)) {
-      await releaseNonce(nonce);
-    }
+    await settle(nonceWasUnused(error));
     throw error;
   }
 }
@@ -276,16 +346,22 @@ export async function deployContract(data) {
   const w = getWallet();
   const nonce = await claimNonce();
 
+  // Same settle-once rule as `send`.
+  let settled = false;
+  const settle = async (unused) => {
+    if (settled) return;
+    settled = true;
+    await settleNonce(nonce, { unused });
+  };
+
   let tx;
   try {
     tx = await w.sendTransaction({ data, nonce });
+    // Broadcast, so the nonce is spent — and the address is not known until it mines,
+    // which is why the wait below is outside this try.
+    await settle(false);
   } catch (error) {
-    // Same rule as `send`: only a failure we can place before the broadcast gives the
-    // nonce back. A deploy is the more expensive of the two to get wrong, so it is the
-    // more important that an ambiguous failure leaves the nonce spent.
-    if (nonceWasUnused(error)) {
-      await releaseNonce(nonce);
-    }
+    await settle(nonceWasUnused(error));
     throw error;
   }
 

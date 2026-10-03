@@ -331,6 +331,15 @@ const DripperSchema = new mongoose.Schema(
   {
     address: { type: String, required: true, unique: true },
     nextNonce: { type: Number, required: true, default: 0 },
+
+    // Claimed but not yet broadcast. In the SHARED document deliberately: a per-process
+    // count cannot tell one instance that another is mid-send, and that blindness is
+    // exactly what made the earlier reconciliation attempt cause a nonce reuse.
+    //
+    // Mongoose drops fields the schema does not declare, so these have to be named here
+    // or the $inc that maintains them would silently do nothing.
+    inFlight: { type: Number, default: 0 },
+    inFlightAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
