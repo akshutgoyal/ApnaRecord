@@ -289,19 +289,26 @@ export default function LifecycleFlow({ role = null, compact = false }) {
 
   return (
     <div>
-      {/* Seven columns is the shape the diagram wants — the path reads left to right — but
-          at `xl` that leaves each card about 150px, which is narrower than several of the
-          strings it has to hold (`did:ethr:<chain>:<address>`, `canAccess(tokenId, viewer)`).
-          Forcing the full row there is what made them spill. At 2xl there is room for the
-          seven, so the path only collapses to a grid when it genuinely cannot fit. */}
-      <div
-        className={`grid gap-3 sm:grid-cols-2 ${
-          owned ? 'lg:grid-cols-3' : 'lg:grid-cols-4 2xl:grid-cols-7'
-        }`}
-      >
-        {steps.map((step) => (
-          <Step key={step.n} step={step} />
-        ))}
+      {/* One row, always.
+          //
+          // The flow is a path, and a path that wraps stops being one: the eye reads
+          // left-to-right, then has to find where it continues on the next line, and the
+          // decision points lose what they were showing -- that later steps depend on
+          // earlier answers.
+          //
+          // So the column count is the step count and the row never breaks. Below `sm`
+          // that would squeeze the cards past reading, so the row scrolls sideways instead
+          // of folding -- panning a diagram is normal; a reflowed one is a different
+          // diagram. The public seven keep their own width for the same reason. */}
+      <div className="-mx-1 overflow-x-auto px-1 pb-1">
+        <div
+          className="grid gap-3"
+          style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(11rem, 1fr))` }}
+        >
+          {steps.map((step) => (
+            <Step key={step.n} step={step} />
+          ))}
+        </div>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-slate-50 px-3 py-2.5">

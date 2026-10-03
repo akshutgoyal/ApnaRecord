@@ -9,10 +9,11 @@ import {
   EmptyPanel,
   StatCard,
 } from '../../components/viz/primitives';
-import { Callout, SkeletonCards } from '../../components/ui';
+import { Callout, Card, SkeletonCards } from '../../components/ui';
 import PanelBoundary from '../../components/PanelBoundary';
 import { DashboardBar } from '../../components/DashboardBar';
 import ExpiryWatchlist from '../../components/ExpiryWatchlist';
+import LifecycleFlow from '../../components/viz/LifecycleFlow';
 import { shortAddress as short, relativeTime } from '../../lib/format';
 
 // The facility's own dashboard. Every number here is scoped to the patients
@@ -126,6 +127,13 @@ export default function HospitalDashboard() {
       <PanelBoundary title="Expiring windows">
         <ExpiryWatchlist items={expiring} />
       </PanelBoundary>
+
+      <Card
+        title="Record lifecycle"
+        subtitle="Where the contract blocks you — the link gates the action, not the content"
+      >
+        <LifecycleFlow role="hospital" />
+      </Card>
     </div>
   );
 }
