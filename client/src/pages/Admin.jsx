@@ -87,7 +87,7 @@ export default function Admin() {
     }
 
     try {
-      const result = await pendingRegistrations((message) => signMessage(message));
+      const result = await pendingRegistrations();
       setPending(result.pending || []);
     } catch (error) {
       // Store the MESSAGE, not the error object. Rendering the object throws React #31 —

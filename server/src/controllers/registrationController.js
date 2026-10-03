@@ -25,13 +25,8 @@ import { call } from '../services/chain.js';
  * anyone enumerate who has signed up. The signer must hold DEFAULT_ADMIN_ROLE.
  */
 
-/** Must stay byte-identical to `pendingMessage` in client/src/lib/wireMessages.js. */
-export function pendingMessage(timestamp) {
-  return 'ApnaRecord read pending registrations\n' + `timestamp: ${timestamp}`;
-}
 
 /** Five minutes — long enough for a slow page, short enough that a captured signature ages out. */
-const MAX_AGE_MS = 5 * 60 * 1000;
 
 /** How many enrolments to check. The chain read is the cost, so this stays bounded. */
 const MAX_CANDIDATES = 25;
@@ -50,32 +45,23 @@ export async function pendingRegistrations(req, res) {
     });
   }
 
-  const timestamp = req.get('x-apnarecord-timestamp');
-  const signature = req.get('x-apnarecord-signature');
-
-  if (!timestamp || !signature) {
+  // Identified by the read token, not by a signature per call.
+  //
+  // This used to demand a fresh EIP-191 statement with a five-minute window, and the admin
+  // console fetches the list on mount -- so every visit to /admin/console raised a MetaMask
+  // prompt of its own, on top of the one the read token already costs. A page that asks
+  // twice for the same assurance trains people to approve without reading, and this is the
+  // list that carries masked addresses.
+  //
+  // The claim is unchanged -- an administrator is asking -- and it is still established
+  // against the chain below. What changed is that it is proved once and reused for the
+  // token's life rather than re-proved every five minutes.
+  const signer = req.viewer;
+  if (!signer) {
     return res.status(401).json({
-      error: 'SignatureRequired',
-      message:
-        'This lists masked email addresses, so it needs a statement signed by an administrator.',
+      error: 'ProofRequired',
+      message: 'This lists masked email addresses, so the caller must prove a wallet.',
     });
-  }
-
-  // `Math.abs` because a clock running fast is as wrong as one running slow, and a future
-  // timestamp would otherwise never expire.
-  const age = Date.now() - Number(timestamp);
-  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
-    return res.status(401).json({
-      error: 'SignatureExpired',
-      message: 'That signature is outside the five-minute window.',
-    });
-  }
-
-  let signer;
-  try {
-    signer = ethers.verifyMessage(pendingMessage(timestamp), signature).toLowerCase();
-  } catch {
-    return res.status(401).json({ error: 'SignatureInvalid', message: 'That signature could not be read.' });
   }
 
   try {

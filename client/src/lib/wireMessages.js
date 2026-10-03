@@ -101,13 +101,3 @@ export function storeMessage(tokenId, patient, recordHash, timestamp) {
   );
 }
 
-/**
- * Must match server/src/controllers/registrationController.js `pendingMessage`.
- *
- * No address in it: the server recovers the signer and then checks the role, so the signer
- * is the answer rather than an input. Including one would only invite a caller to name
- * somebody else's address.
- */
-export function pendingMessage(timestamp) {
-  return 'ApnaRecord read pending registrations\n' + `timestamp: ${timestamp}`;
-}

@@ -71,7 +71,7 @@ router.post('/facilities', recordFacility);
 router.post('/requests', recordRequest);
 
 // Who has enrolled but has no identity yet — signature-gated, because it lists masked emails.
-router.get('/admin/pending', pendingRegistrations);
+router.get('/admin/pending', requireWallet, pendingRegistrations);
 router.get('/facilities/:it', requireWallet, facilityDetail);
 router.get('/patients/:address/links', requireWallet, requireSubject('address'), patientLinks);
 
