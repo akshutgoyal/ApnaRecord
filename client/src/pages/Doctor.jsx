@@ -18,6 +18,8 @@ import {
   SkeletonRows,
   Status,
 } from '../components/ui';
+import RecordPreview from '../components/RecordPreview';
+import { previewOf, looksLikeText } from '../lib/preview';
 
 const RECORD_TYPES = ['MRI_SCAN', 'BLOOD_PANEL', 'XRAY', 'DISCHARGE_SUMMARY'];
 
@@ -144,14 +146,24 @@ export default function Doctor() {
       // unsigned request outright, which is the point of the change.
       const proof = await signRead(tokenId, account);
       const released = await releaseFile(tokenId, account, proof);
-      let plaintext = null;
+      // Decrypt to BYTES, and only turn them into a string when they are a string.
+      //
+      // This is the check the patient screen was missing and the reader already had:
+      // `TextDecoder` never throws on a PNG, it emits replacement characters. The old
+      // `plaintext` was therefore always truthy, the "not readable here" branch below
+      // never ran, and a clinician opening a scan got mojibake where the image belonged.
+      // The doctor's console was the third copy of this code and the last to be fixed.
+      let bytes = null;
+      let text = null;
       try {
-        const bytes = fromBase64(released.ciphertext);
-        plaintext = new TextDecoder().decode(await decryptRecord(bytes, released.contentKey));
+        bytes = fromBase64(released.ciphertext);
+        const plain = await decryptRecord(bytes, released.contentKey);
+        text = looksLikeText(plain) ? new TextDecoder().decode(plain) : null;
       } catch {
-        plaintext = null;
+        bytes = null;
+        text = null;
       }
-      setViewing({ ...released, plaintext, byteLength: fromBase64(released.ciphertext).length });
+      setViewing({ ...released, bytes, text, byteLength: fromBase64(released.ciphertext).length });
       // No expiry re-read: the consent mapping is private, so `canAccess` can
       // only answer open-or-not — and the release succeeding already answered it.
       await load();
@@ -362,15 +374,17 @@ function ReleasedRecord({ record, onClose }) {
         <Pill tone="slate">{formatBytes(record.byteLength)} ciphertext</Pill>
       </div>
 
-      {record.plaintext ? (
+      {record.bytes && previewOf(record.mimeType, record.bytes) ? (
+        <RecordPreview bytes={record.bytes} mimeType={record.mimeType} fileName={record.fileName} />
+      ) : record.text ? (
         <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-white p-3.5 text-xs leading-relaxed text-slate-700">
-          {record.plaintext}
+          {record.text}
         </pre>
       ) : (
-        <Callout tone="warn" title="Released, but not readable here">
-          The bytes arrived but could not be decrypted — this record was encrypted with a different
-          key, or it is not text (an image or scan). The digest can still be verified on the Verify
-          page.
+        <Callout tone="warn" title="Released, but not displayable here">
+          {record.bytes
+            ? 'The bytes decrypted cleanly, but a browser cannot show this format — Word documents and the like. Use the download below; it opens in whatever handles the type.'
+            : 'The bytes arrived but could not be decrypted — this record was encrypted with a different key. The digest can still be verified on the Verify page.'}
         </Callout>
       )}
 

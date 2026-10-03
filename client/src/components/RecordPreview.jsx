@@ -26,7 +26,12 @@ export default function RecordPreview({ bytes, mimeType, fileName }) {
     return () => URL.revokeObjectURL(url);
   }, [url]);
 
-  if (!preview || !url) return null;
+  // An Office file has no inline rendering. Returning null rather than framing it is
+  // deliberate: a blank <iframe> looks like a failure, and the caller can say "this one
+  // downloads" instead. Nothing here can preview it -- the alternative is a third-party
+  // viewer, which would need a public URL to a record whose whole point is that no such
+  // URL exists.
+  if (!preview || !url || preview.kind === 'office') return null;
 
   const label = fileName || 'Record';
 

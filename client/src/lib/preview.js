@@ -19,8 +19,35 @@ const SIGNATURES = [
   { bytes: [0x89, 0x50, 0x4e, 0x47], mime: 'image/png' },
   { bytes: [0xff, 0xd8, 0xff], mime: 'image/jpeg' },
   { bytes: [0x47, 0x49, 0x46, 0x38], mime: 'image/gif' },
+  { bytes: [0x42, 0x4d], mime: 'image/bmp' },
+  { bytes: [0x49, 0x49, 0x2a, 0x00], mime: 'image/tiff' },
+  { bytes: [0x4d, 0x4d, 0x00, 0x2a], mime: 'image/tiff' },
+  { bytes: [0x00, 0x00, 0x01, 0x00], mime: 'image/x-icon' },
+  // ISO base media: AVIF and HEIC carry their brand four bytes in.
   { bytes: [0x25, 0x50, 0x44, 0x46], mime: 'application/pdf' },
 ];
+
+/**
+ * Formats a browser will not render, however it is handed to them.
+ *
+ * DOCX and the other Office files are ZIP containers. Inline display would need the
+ * document's text extracted, or a third-party viewer fetched over the network with a
+ * public URL to the file -- and the whole point of this record is that no such URL
+ * exists. So they are classified rather than guessed at, and the console offers the
+ * download instead of a blank frame.
+ */
+const OFFICE = new Set([
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/rtf',
+]);
 
 const startsWith = (bytes, signature) =>
   bytes.length >= signature.length && signature.every((byte, i) => bytes[i] === byte);
@@ -37,7 +64,8 @@ function sniff(bytes) {
   return hit ? hit.mime : null;
 }
 
-const kindOf = (mime) => (mime === 'application/pdf' ? 'pdf' : 'image');
+const kindOf = (mime) =>
+  OFFICE.has(mime) ? 'office' : mime === 'application/pdf' ? 'pdf' : 'image';
 
 /**
  * Returns { kind, mimeType } when the bytes can be shown, or null when they cannot.
@@ -51,7 +79,10 @@ export function previewOf(mimeType, bytes) {
 
   const declared = String(mimeType || '').toLowerCase().split(';')[0].trim();
 
-  if (declared.startsWith('image/') || declared === 'application/pdf') {
+  // Every `image/*` is offered to an <img>, because that is the one place a browser
+  // decodes an image safely -- no script in an SVG runs inside an <img>. Office files
+  // are named so the caller can say "download this" rather than show an empty frame.
+  if (declared.startsWith('image/') || declared === 'application/pdf' || OFFICE.has(declared)) {
     return { kind: kindOf(declared), mimeType: declared };
   }
 
