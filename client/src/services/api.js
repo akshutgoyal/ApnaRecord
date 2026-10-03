@@ -126,18 +126,45 @@ async function request(path, options = {}) {
   // passing any custom header silently dropped the default Content-Type — harmless
   // for a GET, but it turns a signed POST into a body the server cannot parse, and
   // the failure looks like a bad signature rather than a missing content type.
-  const { headers, ...rest } = options;
+  const { headers, proof, ...rest } = options;
+
+  // `proof: true` asks for the wallet's token up front. The gates that serve a public
+  // subset still answer 200 without one, so a retry-on-401 never fires for them — and a
+  // signed-in dashboard would quietly get the redacted payload with every name blank.
+  // The refusal retry below stays as the net for the gates that hard-require a proof.
+  const upfront = proof ? await authHeaders() : {};
+
+  const send = (extra = {}) =>
+    fetch(`${API_URL}${path}`, {
+      ...rest,
+      headers: { 'Content-Type': 'application/json', ...(headers || {}), ...upfront, ...extra },
+    });
 
   let response;
   try {
-    response = await fetch(`${API_URL}${path}`, {
-      ...rest,
-      headers: { 'Content-Type': 'application/json', ...(headers || {}) },
-    });
+    response = await send();
   } catch {
     const error = new Error('Could not reach the API. Is the backend running on ' + API_URL + '?');
     error.code = 'API_DOWN';
     throw error;
+  }
+
+  // A gated read answers 401 ProofRequired. Prove the wallet once, then send the same
+  // request again.
+  //
+  // Answering here rather than marking every call site matters for two reasons: the
+  // public reads must never prompt (the verify page has no wallet at all), and a call
+  // site that forgets to opt in would fail with a sentence about proving a wallet,
+  // which reads like a permissions bug rather than a missing header.
+  if (response.status === 401 && !('Authorization' in (headers || {}))) {
+    const refusal = await response
+      .clone()
+      .json()
+      .catch(() => ({}));
+    if (refusal.error === 'ProofRequired') {
+      const proven = await authHeaders();
+      if (Object.keys(proven).length) response = await send(proven);
+    }
   }
 
   const payload = await response.json().catch(() => ({}));
