@@ -246,9 +246,19 @@ export default function RecordReader({ tokenId, viewer, record, onBack, backLabe
             </p>
             <p className="mono mt-1 break-all text-slate-600">{state.released.recordHash}</p>
             <p className="mt-2 text-[13px] leading-relaxed text-slate-500">
-              The file location the contract released was{' '}
-              <span className="mono">{state.released.cid || '(empty)'}</span>. The bytes were
-              decrypted in this browser — the server never held the plaintext.
+              {/* The digest above is the file's real address. The cid is a second, shorter
+                  string the contract also carries — and on records minted before the label
+                  was fixed it reads "local://<12 hex>", which names neither the location (the
+                  bytes are in object storage) nor enough of the hash to identify anything.
+                  Repeating that as "the file location" told the reader something false, so a
+                  legacy cid is left out and a real one is shown. */}
+              {state.released.cid && !String(state.released.cid).startsWith('local://') ? (
+                <>
+                  The contract also records this file as{' '}
+                  <span className="mono">{state.released.cid}</span>.{' '}
+                </>
+              ) : null}
+              The bytes were decrypted in this browser — the server never held the plaintext.
             </p>
           </section>
         </>
