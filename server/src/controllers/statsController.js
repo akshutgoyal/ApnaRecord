@@ -77,7 +77,34 @@ let refreshing = null;
  * counts and consent windows is not a meaningful difference — and the `stale` flag
  * says so honestly rather than pretending the numbers are live to the second.
  */
+/**
+ * The same payload with every name removed.
+ *
+ * The cache is shared, so a label cannot live inside it per-viewer — but a label also
+ * must not go to a caller who has not proved a wallet. So the cache keeps the full
+ * payload and the response is redacted on the way out.
+ *
+ * A count of "two facilities" is public. Which two is the directory, and that stays
+ * behind a proof. Nulled rather than deleted so the shape a dashboard destructures
+ * never changes.
+ */
+const LABEL_KEY = /^(label|.*Label)$/i;
+function withoutLabels(value) {
+  if (Array.isArray(value)) return value.map(withoutLabels);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, inner] of Object.entries(value)) {
+      out[key] = LABEL_KEY.test(key) ? null : withoutLabels(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
 export async function stats(req, res) {
+  const redact = !req.viewer;
+  // One exit, so a new branch cannot forget to redact.
+  const send = (payload) => res.json(redact ? withoutLabels(payload) : payload);
   try {
     // A dashboard's refresh button should mean "read the chain again", not
     // "re-read the cache I just served". ?fresh=1 pays the six seconds on purpose.
@@ -91,7 +118,7 @@ export async function stats(req, res) {
         const { linkedPatientsOf } = await import('../lib/facilityScope.js');
         const patients = (await linkedPatientsOf(facility)).map((p) => p.toLowerCase());
         const payload = await computeStats();
-        return res.json({
+        return send({
           ...applyFacilityScope(payload, new Set(patients)),
           cached: false,
           stale: false,
@@ -116,7 +143,7 @@ export async function stats(req, res) {
             refreshing = null;
           });
       }
-      return res.json({
+      return send({
         ...cache.payload,
         cached: true,
         stale,
@@ -125,7 +152,7 @@ export async function stats(req, res) {
       });
     }
 
-    return res.json({ ...(await computeStats()), cached: false, stale: false, cacheAgeMs: 0 });
+    return send({ ...(await computeStats()), cached: false, stale: false, cacheAgeMs: 0 });
   } catch (error) {
     return res.status(502).json({ error: 'StatsUnavailable', message: error.message });
   }
@@ -199,6 +226,8 @@ function applyFacilityScope(payload, patients) {
 }
 
 async function computeStats() {
+
+
 const [identityList, allEvents, labels, profiles] = await Promise.all([
     identities(),
     events(1000),

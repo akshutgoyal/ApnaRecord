@@ -210,3 +210,28 @@ export async function optionalWallet(req, res, next) {
   }
   return next();
 }
+
+/**
+ * The label map, filtered to what this viewer may see.
+ *
+ * Labels are the one off-chain thing the dashboard aggregates carry — a count of
+ * "three doctors" is public, "Dr Meera at City Hospital" is not. The walkthrough is
+ * supposed to show live chain data without a wallet, so the numbers have to stay
+ * readable anonymously; only the names are withheld.
+ *
+ * Admin and auditor read the whole directory. Everyone else gets the names they are
+ * already entitled to — their own, and a facility's linked patients — which is the
+ * same rule the record list uses.
+ */
+export async function visibleLabels(viewer) {
+  const { labelMap } = await import('../services/chain.js');
+  if (!viewer) return {};
+  const all = await labelMap().catch(() => ({}));
+  const entitled = await entitledPatients(viewer).catch(() => new Set());
+  if (!entitled) return all;
+  const out = {};
+  for (const [address, label] of Object.entries(all)) {
+    if (entitled.has(String(address).toLowerCase())) out[address] = label;
+  }
+  return out;
+}

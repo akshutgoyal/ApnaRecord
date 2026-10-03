@@ -31,9 +31,30 @@ export async function chainStatus(req, res) {
 }
 
 /** GET /api/chain/identities — rebuilt from IdentityCreated logs. */
+
+/** Names are the directory; counts are public. See statsController for the reasoning. */
+const LABEL_KEY = /^(label|.*Label)$/i;
+function withoutLabels(value) {
+  if (Array.isArray(value)) return value.map(withoutLabels);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, inner] of Object.entries(value)) {
+      out[key] = LABEL_KEY.test(key) ? null : withoutLabels(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
 export async function chainIdentities(req, res) {
   try {
-    return res.json({ identities: await identities(), source: 'IdentityCreated logs + hasRole' });
+    const list = await identities();
+    // The names are the directory. Counts and roles are chain-derived and public; the
+    // labels are off-chain, so they go only to a caller who proved a wallet.
+    return res.json({
+      identities: req.viewer ? list : withoutLabels(list),
+      source: 'IdentityCreated logs + hasRole',
+    });
   } catch (error) {
     return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
   }
