@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'ethers';
 import { useChain } from '../chain';
 import { decryptRecord, fromBase64, formatBytes } from '../crypto';
-import { listRecords, releaseFile, recordRequest } from '../services/api';
+import { chainEvents, listRecords, releaseFile, recordRequest } from '../services/api';
 import { requestMessage } from '../lib/wireMessages';
 import { useTx } from '../hooks/useTx';
 import AddressInput from '../components/AddressInput';
@@ -168,7 +168,36 @@ export default function Doctor() {
         bytes = null;
         text = null;
       }
-      setViewing({ ...released, bytes, text, byteLength: fromBase64(released.ciphertext).length });
+      // The expiry is not readable from any mapping -- the consent record is private, so
+      // `canAccess` can only answer open-or-not. The AccessGranted event carries it, and
+      // events are public, which is how the patient's screen shows a real countdown.
+      //
+      // Without this the card passed `undefined` and ConsentTimer rendered "Consent: none"
+      // on a record whose consent was very much live -- a wrong answer to the question the
+      // card exists to answer.
+      let expiresAt = null;
+      try {
+        const { events } = await chainEvents({ limit: 200 });
+        const grant = (events || []).find(
+          (e) =>
+            e.name === 'AccessGranted' &&
+            Number(e.args?.tokenId) === Number(tokenId) &&
+            String(e.args?.viewer).toLowerCase() === String(account).toLowerCase()
+        );
+        if (grant?.args?.expiresAt) expiresAt = Number(grant.args.expiresAt);
+      } catch {
+        // No timer rather than a wrong one. The release itself already proved the window
+        // is open; only its end is unknown.
+        expiresAt = null;
+      }
+
+      setViewing({
+        ...released,
+        bytes,
+        text,
+        expiresAt,
+        byteLength: fromBase64(released.ciphertext).length,
+      });
       // No expiry re-read: the consent mapping is private, so `canAccess` can
       // only answer open-or-not — and the release succeeding already answered it.
       await load();
