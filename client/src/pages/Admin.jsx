@@ -76,7 +76,10 @@ export default function Admin() {
       const result = await pendingRegistrations((message) => signMessage(message));
       setPending(result.pending || []);
     } catch (error) {
-      setPendingError(describeError(error));
+      // Store the MESSAGE, not the error object. Rendering the object throws React #31 —
+        // 'Objects are not valid as a React child' — and this catch runs whenever the
+        // signed read fails, which is precisely when a readable message matters most.
+        setPendingError(describeError(error).detail || error.message);
     } finally {
       setPendingLoading(false);
     }
