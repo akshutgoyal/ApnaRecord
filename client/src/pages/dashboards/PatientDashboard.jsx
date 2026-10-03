@@ -436,7 +436,7 @@ export default function PatientDashboard() {
       </Card>
 
       <Card title="How your record moves" subtitle="You control steps 5 and 6">
-        <LifecycleFlow compact />
+        <LifecycleFlow role="patient" />
       </Card>
 
       {/* ------------------------------------------------------------ drawer */}

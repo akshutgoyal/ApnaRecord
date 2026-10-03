@@ -617,7 +617,7 @@ export default function DoctorDashboard() {
       </div>
 
       <Card title="Record lifecycle" subtitle="You act at steps 2 and 5; the contract decides at 4 and 6">
-        <LifecycleFlow />
+        <LifecycleFlow role="doctor" />
       </Card>
 
       {/* ------------------------------------------------------------ drawer */}

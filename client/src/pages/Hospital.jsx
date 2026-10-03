@@ -5,6 +5,7 @@ import { useChain } from '../chain';
 import { facilityDetail } from '../services/api';
 import { useTx } from '../hooks/useTx';
 import AddressInput from '../components/AddressInput';
+import LifecycleFlow from '../components/viz/LifecycleFlow';
 import {
   Busy,
   Callout,
@@ -192,6 +193,14 @@ export default function Hospital() {
             </ul>
           )}
         </Card>
+
+        {/* The facility's own arc, not the generic seven. The generic one spends most of
+            its length on steps a hospital never takes -- minting to itself is not a thing,
+            and granting access is the patient's alone -- so the boundary at the end of
+            this one is the part worth reading. */}
+        <div className="mt-4">
+          <LifecycleFlow role="hospital" />
+        </div>
       </div>
 
       <Field label="Minting for a linked patient" hint="The hospital mints from the admin console today — the gate is the link, not the page.">

@@ -574,7 +574,7 @@ export default function AuditorDashboard() {
       </Card>
 
       <Card title="Record lifecycle" subtitle="What the auditor may and may not see at each step">
-        <LifecycleFlow />
+        <LifecycleFlow role="auditor" />
       </Card>
 
       {/* ------------------------------------------------------------ drawer */}

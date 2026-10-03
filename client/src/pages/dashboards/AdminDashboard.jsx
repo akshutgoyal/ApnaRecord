@@ -680,7 +680,7 @@ export default function AdminDashboard() {
         title="Record lifecycle"
         subtitle="Where the contract blocks actions — and the three exits that show the design working"
       >
-        <LifecycleFlow />
+        <LifecycleFlow role="admin" />
       </Card>
 
       <p className="text-[11px] text-slate-500">
