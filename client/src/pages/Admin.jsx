@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { isAddress, ZeroAddress } from 'ethers';
 import { useChain, describeError, contractError } from '../chain';
-import { encryptRecord, formatBytes, toBase64 } from '../crypto';
+import { encryptRecord, digestOf, formatBytes, toBase64 } from '../crypto';
 import { chainIdentities, storeRecord, recordIdentity, recordFacility, pendingRegistrations } from '../services/api';
 import { storeMessage, identityMessage, facilityMessage } from '../lib/wireMessages';
 import { DEMO_ACCOUNTS } from '../config/demoAccounts';
@@ -411,6 +411,12 @@ export default function Admin() {
         // and truncated the digest to twelve hex characters — a lie about where
         // it lived, and too short to identify it.
         const cid = `sha256:${digest.slice(2)}`;
+
+        // The plaintext digest, so the public verify page works for the person who
+        // registered the record. The chain anchors the ciphertext -- right for the blob,
+        // useless to someone holding the scan, and encryption takes a fresh IV so they can
+        // never reproduce it. Their own file used to answer "Tampered".
+        const plainHash = digestOf(buffer);
         const timestamp = Date.now();
         const signature = await signMessage(storeMessage(tokenId, mint.patient, digest, timestamp));
 
@@ -423,6 +429,7 @@ export default function Admin() {
           contentKey,
           ciphertext: toBase64(payload),
           cid,
+          plainHash,
           timestamp,
           signature,
         });

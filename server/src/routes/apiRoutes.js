@@ -122,7 +122,7 @@ router.delete('/profiles/:address', deleteProfile);
 // Record index and storage. Note: /owner/:address must precede /:tokenId.
 router.get('/records', optionalWallet, listRecords);
 router.post('/records', storeRecord);
-router.get('/records/owner/:address', requireWallet, requireSubject('address'), listByOwner);
+router.get('/records/owner/:address', optionalWallet, listByOwner);
 router.get('/records/:tokenId', requireWallet, getRecord);
 
 // --- Releases a record, or a reading of one. ---

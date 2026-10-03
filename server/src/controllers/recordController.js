@@ -182,7 +182,25 @@ export async function listByOwner(req, res) {
   }
   try {
     const tokens = await tokensOf(address);
-    return res.json({ address, records: tokens });
+
+    // The tokens come off the chain, so the list itself is public -- `RecordMinted`
+    // carries the id and the digest, and anyone can scan it. What is NOT on chain is the
+    // record type, which is exactly why it lives in the database.
+    //
+    // So the same shape as the platform list: the chain fields for everyone, the type only
+    // for a viewer entitled to this patient. An anonymous reader -- the demo persona -- gets
+    // a record that exists rather than an empty list, which is what a hard gate produced.
+    const { entitledPatients } = await import('../middleware/requireWallet.js');
+    const entitled = req.viewer
+      ? await entitledPatients(req.viewer).catch(() => new Set())
+      : new Set();
+    const maySeeType = !entitled || entitled.has(String(address).toLowerCase());
+
+    const records = maySeeType
+      ? tokens
+      : tokens.map(({ recordType, facility, ...onChain }) => onChain);
+
+    return res.json({ address, records, clinicalFields: maySeeType });
   } catch (error) {
     return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
   }
@@ -208,6 +226,7 @@ export async function storeRecord(req, res) {
       contentKey,
       ciphertext,
       cid,
+      plainHash,
       timestamp,
       signature,
     } = req.body || {};
@@ -217,6 +236,11 @@ export async function storeRecord(req, res) {
     }
     if (typeof contentKey !== 'string' || !/^[0-9a-fA-F]{64}$/.test(contentKey)) {
       return res.status(400).json({ error: 'BadRequest', message: 'contentKey must be 32 bytes of hex.' });
+    }
+    // Optional, and only used by the public verify page. A plaintext digest is a hash,
+    // not a file, so accepting it does not put the scan anywhere near the server.
+    if (plainHash != null && plainHash !== '' && !/^0x[0-9a-fA-F]{64}$/.test(plainHash)) {
+      return res.status(400).json({ error: 'BadRequest', message: 'plainHash must be 0x + 64 hex chars.' });
     }
     if (typeof ciphertext !== 'string' || ciphertext.length === 0) {
       return res.status(400).json({ error: 'BadRequest', message: 'ciphertext is required.' });
@@ -354,6 +378,7 @@ export async function storeRecord(req, res) {
           patient: ethers.getAddress(patient).toLowerCase(),
           recordType: recordType || 'UNSPECIFIED',
           recordHash: digest,
+          plainHash: String(plainHash || '').toLowerCase(),
           cid: cid || '',
           sealedKey: '(on disk)',
           fileName: fileName || 'record.bin',

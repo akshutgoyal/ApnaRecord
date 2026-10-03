@@ -153,8 +153,8 @@ export default function Verify() {
             </Field>
 
             <Field
-              label="Drop the encrypted record file"
-              hint="The chain anchors keccak256 of the encrypted file, so this is the file to check — not the plaintext scan."
+              label="Drop the record file"
+              hint="Either file works. The encrypted file is checked by the contract itself, which is the stronger claim; the plaintext scan is matched against the plaintext digest the platform recorded when the record was minted."
             >
               <input
                 type="file"
@@ -256,10 +256,38 @@ export default function Verify() {
                         ? 'Authentic — this file is exactly what was registered'
                         : 'Tampered — this file is not the registered one'}
                     </p>
+                    {/* Which check ran, said plainly. The chain anchors the ENCRYPTED file, so a
+                        scan can only be matched against the digest the platform recorded at mint
+                        — which is our word, not the contract's. Claiming the contract for both
+                        would be the same kind of confident-wrong this page exists to catch. */}
                     <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                      Checked against token #{result.tokenId}. The verdict came from the contract's
-                      own <span className="mono">verifyRecord</span> call — we did not compute the
-                      comparison ourselves.
+                      {result.authentic && result.verifiedBy === 'chain' ? (
+                        <>
+                          Checked against token #{result.tokenId}. The verdict came from the
+                          contract&apos;s own <span className="mono">verifyRecord</span> call — we did
+                          not compute the comparison ourselves.
+                        </>
+                      ) : result.authentic && result.verifiedBy === 'server' ? (
+                        <>
+                          Checked against token #{result.tokenId}. The chain anchors the{' '}
+                          <em>encrypted</em> file, so a scan can only be matched against the plaintext
+                          digest the platform recorded when it was minted. That is the platform&apos;s
+                          word rather than the contract&apos;s — send the encrypted file for a check
+                          the chain performs itself.
+                        </>
+                      ) : result.hasPlaintextRecord ? (
+                        <>
+                          Checked against token #{result.tokenId}, both against the contract&apos;s
+                          digest and against the plaintext digest the platform recorded at mint.
+                          Neither matched.
+                        </>
+                      ) : (
+                        <>
+                          Checked against token #{result.tokenId}. Only the contract&apos;s digest of the{' '}
+                          <em>encrypted</em> file could be checked — this record predates the
+                          plaintext digest, so the file you minted cannot be matched here.
+                        </>
+                      )}
                     </p>
                     {result.note && (
                       <p className="mt-1.5 text-[11px] text-slate-500">Input: {result.note}</p>

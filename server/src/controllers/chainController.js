@@ -351,12 +351,57 @@ export async function verify(req, res) {
     if (!record) return res.status(404).json({ error: 'RecordNotFound', message: 'No such record.' });
 
     const [verdict] = await verifyRecord(tokenId, provided);
+
+    // The chain anchors keccak256 of the CIPHERTEXT, which is right for the stored blob
+    // and useless to the person who registered the record -- they hold the scan, not the
+    // ciphertext, and encryption takes a fresh IV each time, so they can never reproduce
+    // it. Their own file answered "Tampered".
+    //
+    // So a second check against the plaintext digest recorded at mint. It is the weaker
+    // claim, and the response names which one matched rather than letting the two be
+    // confused: 'chain' means the contract agreed, 'server' means the platform's own record
+    // did. Anyone who wants the strong claim sends the encrypted file.
+    if (verdict) {
+      return res.json({
+        tokenId,
+        provided,
+        onChain: record.recordHash,
+        authentic: true,
+        verifiedBy: 'chain',
+        // Deliberately not returned: the file, the CID, or anything readable.
+      });
+    }
+
+    // `record` came off the chain and carries no plaintext digest -- that lives in the
+    // record row. Reading it from `record` would have made this branch dead code, which is
+    // exactly what the first test showed.
+    const { RecordModel, isDbReady } = await import('../models/index.js');
+    const row = isDbReady()
+      ? await RecordModel.findOne({ tokenId }).select('plainHash').lean()
+      : null;
+
+    const providedLower = String(provided).toLowerCase();
+    if (row?.plainHash && String(row.plainHash).toLowerCase() === providedLower) {
+      return res.json({
+        tokenId,
+        provided,
+        onChain: record.recordHash,
+        authentic: true,
+        verifiedBy: 'server',
+        note:
+          "This is the plaintext digest the platform recorded when the record was minted. " +
+          "That is the platform's word rather than the chain's -- the chain anchors the encrypted " +
+          "file. Send the encrypted file for a check the contract performs itself.",
+      });
+    }
+
     return res.json({
       tokenId,
       provided,
       onChain: record.recordHash,
-      authentic: verdict,
-      verifiedBy: 'contract.verifyRecord',
+      hasPlaintextRecord: Boolean(row?.plainHash),
+      authentic: false,
+      verifiedBy: null,
       // Deliberately not returned: the file, the CID, or anything readable.
     });
   } catch (error) {

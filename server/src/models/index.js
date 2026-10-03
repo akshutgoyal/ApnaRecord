@@ -17,6 +17,18 @@ const RecordSchema = new mongoose.Schema(
     burned: { type: Boolean, default: false },
     // keccak256 of the ciphertext. Also the on-disk blob name and the on-chain anchor.
     recordHash: { type: String, required: true, unique: true, index: true, lowercase: true },
+    // keccak256 of the PLAINTEXT, and the reason it is stored separately.
+    //
+    // The anchor above is a hash of the ciphertext, which is the right thing for
+    // object integrity -- it names the blob. But it makes the public verify page
+    // useless to the person who registered the record: they hold the scan, not the
+    // ciphertext, and encryption uses a fresh IV every time, so they can never
+    // reproduce it. Uploading their own file answered "Tampered".
+    //
+    // So the plaintext digest is recorded too. It is a hash, not the file, and it is
+    // checked against the server's record rather than the chain -- a weaker claim, and
+    // the response says which of the two matched so it is never mistaken for the other.
+    plainHash: { type: String, default: '', lowercase: true, index: true },
     cid: { type: String, default: '' },
     // Content key, sealed under the server master key. Never the raw key.
     sealedKey: { type: String, required: true },
