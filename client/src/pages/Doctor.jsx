@@ -156,8 +156,13 @@ export default function Doctor() {
       let bytes = null;
       let text = null;
       try {
-        bytes = fromBase64(released.ciphertext);
-        const plain = await decryptRecord(bytes, released.contentKey);
+        const plain = await decryptRecord(fromBase64(released.ciphertext), released.contentKey);
+        // `bytes` is the PLAINTEXT. Keeping the ciphertext here was the bug: the declared
+        // MIME type is image/png, so previewOf classified the ciphertext as an image and
+        // the <img> was handed bytes that are not a PNG. It failed to decode and the
+        // browser drew the alt text -- which is why the record showed its own filename
+        // where the scan should be.
+        bytes = plain;
         text = looksLikeText(plain) ? new TextDecoder().decode(plain) : null;
       } catch {
         bytes = null;
