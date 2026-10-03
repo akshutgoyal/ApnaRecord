@@ -5,6 +5,7 @@ import { useChain, describeError, contractError } from '../chain';
 import { encryptRecord, formatBytes, toBase64 } from '../crypto';
 import { chainIdentities, storeRecord, recordIdentity, recordFacility, pendingRegistrations } from '../services/api';
 import { storeMessage, identityMessage, facilityMessage } from '../lib/wireMessages';
+import { DEMO_ACCOUNTS } from '../config/demoAccounts';
 import { useTx } from '../hooks/useTx';
 import { useToast } from '../components/Toast';
 import AddressInput from '../components/AddressInput';
@@ -111,7 +112,7 @@ export default function Admin() {
    */
   const ROLE_FOR = { auditor: 'AUDITOR_ROLE', doctor: 'MANAGER_ROLE', hospital: 'HOSPITAL_ROLE' };
 
-  const assign = useCallback(async (row, role) => {
+  const assign = useCallback(async (row, role, facilityLabel = '') => {
     const addr = row.address;
     setAssigning(addr + role);
     try {
@@ -123,7 +124,8 @@ export default function Admin() {
           // retry after a failed grant must not die on a step that already succeeded.
           const contract = await readContract();
           if (!(await contract.facilities(addr))) {
-            const name = facilityName.trim() || `Hospital ${addr.slice(0, 6)}`;
+            // A seeded persona carries its own name; the form field is for anyone else.
+            const name = facilityLabel || facilityName.trim() || `Hospital ${addr.slice(0, 6)}`;
             const created = await writeAs('createFacility', [addr, name]);
             await created.wait();
           }
@@ -203,6 +205,72 @@ export default function Admin() {
   const isAdmin = roles.admin;
 
   // ------------------------------------------------------------- actions
+
+  /**
+   * Seed the demo cast in one press.
+   *
+   * Five personas have to be created in a particular order — a facility before the staff
+   * identity that names it, an identity before the role granted on it — and doing it by
+   * hand is eight signatures and five label writes, in the right order, without losing
+   * your place. That is how the last two resets were done, and one of them was left
+   * half-finished for a day.
+   *
+   * A sequence of `assign` calls rather than new logic, because `assign` already checks
+   * before it writes: `createFacility` is skipped when the facility exists, and
+   * `IdentityExists` is tolerated on the identity. So this FINISHES a half-seeded cast
+   * and costs nothing but reads on a complete one.
+   *
+   * Each persona runs its own `run`, so the toasts say which step is happening rather
+   * than leaving the whole cast behind one spinner.
+   */
+  const [seeding, setSeeding] = useState(false);
+
+  const seedCast = async () => {
+    setSeeding(true);
+    try {
+      for (const persona of DEMO_ACCOUNTS) {
+        await assign(persona, persona.role, persona.facilityName || '');
+      }
+      await labelCast();
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  /**
+   * The labels, which live off-chain.
+   *
+   * Separate from the assignments because the chain cannot carry them: `IdentityCreated`
+   * used to name the account and now does not. A cast with identities and no labels is
+   * registered and unreadable, which is exactly what the last reset produced — five rows
+   * with empty names.
+   */
+  const labelCast = () =>
+    run(
+      'Label the demo cast',
+      async () => {
+        for (const persona of DEMO_ACCOUNTS) {
+          // A hospital's own address IS its facility; everyone else is global.
+          const facility = persona.role === 'hospital' ? persona.address : '';
+          const timestamp = Date.now();
+          const signature = await signMessage(
+            identityMessage(persona.address, persona.label, facility, timestamp)
+          );
+          await recordIdentity({
+            account: persona.address,
+            label: persona.label,
+            facility,
+            timestamp,
+            signature,
+          });
+        }
+        await load();
+      },
+      {
+        successDetail:
+          'Five labels recorded off-chain. The chain holds the identities; the names are the part it refuses to carry.',
+      }
+    );
 
   const createIdentity = () =>
     run(
@@ -403,9 +471,21 @@ export default function Admin() {
         title="Operations console"
         lead="Register identities, grant roles, mint records and revoke them. Only this wallet can mint — and that restriction lives in the contract, not on this page."
         aside={
-          <button type="button" onClick={load} className="btn-secondary">
-            Refresh
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* One press instead of eight signatures in the right order. Idempotent, so
+                running it on a half-seeded cast finishes it rather than colliding with it. */}
+            <button
+              type="button"
+              onClick={seedCast}
+              disabled={seeding}
+              className={seeding ? 'btn-secondary opacity-60' : 'btn-secondary'}
+            >
+              {seeding ? 'Seeding — confirm each step' : 'Seed the demo cast'}
+            </button>
+            <button type="button" onClick={load} className="btn-secondary">
+              Refresh
+            </button>
+          </div>
         }
       />
 

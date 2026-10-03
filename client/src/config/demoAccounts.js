@@ -37,6 +37,10 @@ export const DEMO_ACCOUNTS = [
     key: 'hospital',
     role: 'hospital',
     label: 'Hospital 101',
+    // createFacility takes the name and the contract deliberately stores none, so a
+    // seeder has to carry it. Without this the demo falls back to a name derived
+    // from the address, which is not what the walkthrough is meant to show.
+    facilityName: 'City Hospital 101',
     address: '0xc089766ad7B4E2835f1955D7f7122242CdDA978C',
     note: 'Holds HOSPITAL_ROLE. Links patients with their consent, mints for linked patients, manages own staff.',
   },
