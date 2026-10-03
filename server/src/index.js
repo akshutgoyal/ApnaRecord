@@ -51,6 +51,21 @@ const ALLOWED_HEADERS = [
   'x-apnarecord-timestamp',
 ];
 
+// Anything carrying record bytes or a proof is marked no-store.
+//
+// Without this the browser is free to write a released record to its disk cache, and a
+// shared proxy could hold a copy of a file whose whole design is that only one viewer
+// ever sees it. This is the part of "don't let anyone else see it" that has teeth --
+// blocking right-click has none.
+app.use('/api/records', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+app.use('/api/profiles', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 app.use((req, res, next) => {
   const origin = req.get('origin');
   // No Origin header at all means a same-origin navigation, curl, or another

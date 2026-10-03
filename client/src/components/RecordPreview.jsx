@@ -46,11 +46,24 @@ export default function RecordPreview({ bytes, mimeType, fileName }) {
 
   const label = fileName || 'Record';
 
+  // A speed bump, not a control, and scoped to this element rather than the whole site.
+  //
+  // The bytes a browser is showing are already in the page -- there is no path to hide.
+  // This only stops the casual "right click, save image as", and anyone who knows F12 is
+  // past it in a second. Blocking the context menu site-wide would cost every honest
+  // interaction (copy, open in new tab, spell-check) to buy nothing here.
+  const deterrent = {
+    onContextMenu: (e) => e.preventDefault(),
+    onDragStart: (e) => e.preventDefault(),
+  };
+
   if (preview.kind === 'image') {
     return (
       <img
         src={url}
         alt={label}
+        draggable={false}
+        {...deterrent}
         className="max-h-[32rem] w-full rounded-md border border-line bg-slate-50 object-contain"
       />
     );
@@ -60,6 +73,7 @@ export default function RecordPreview({ bytes, mimeType, fileName }) {
     <iframe
       src={url}
       title={label}
+      {...deterrent}
       className="h-[32rem] w-full rounded-md border border-line bg-slate-50"
     />
   );
