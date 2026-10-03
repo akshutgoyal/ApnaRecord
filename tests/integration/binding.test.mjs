@@ -64,6 +64,11 @@ async function enrolWith(email, token) {
 
   const created = await post('/wallet/enrol', {
     address,
+    // Sent, not omitted. This suite used to enrol without a role, so every row it
+    // created looked like a registration whose selector had failed -- and the role path
+    // had no test at all. A caller that skips the input proves nothing about the feature
+    // that consumes it.
+    requestedRole: 'doctor',
     sealed: sealed.sealed,
     salt: sealed.salt,
     iterations: sealed.iterations,

@@ -171,7 +171,27 @@ console.log(`Dripper (throwaway): ${dripper.address}`);
 // one is dropped. The worst case then is a test database that did not need clearing,
 // rather than an evening's labelling.
 const dbName = (DATABASE_URL.match(/\/([^/?]+)(\?|$)/) || [])[1] || '';
-const mayDrop = /127\.0\.0\.1|localhost/.test(DATABASE_URL) && /test/i.test(dbName);
+const isLocal = /127\.0\.0\.1|localhost/.test(DATABASE_URL);
+const mayDrop = isLocal && /test/i.test(dbName);
+
+// Refuse to run at all against a remote database.
+//
+// The guard below stops the suite DROPPING one, which is the destructive half. It does not
+// stop it WRITING to one -- and it writes enrolments, identities and drip records, every
+// run. Pointed at Atlas it filled a real admin panel with fifteen wallets that look like
+// registrations and belong to nobody, and the only way to tell was that none carried a
+// role. A destructive guard on the drop was never the whole risk.
+//
+// Overridable, because CI legitimately runs against a throwaway remote instance and should
+// say so on purpose rather than by accident.
+if (!isLocal && process.env.ALLOW_REMOTE_TEST_DB !== '1') {
+  console.error(
+    `\nRefusing to run: DATABASE_URL points at "${dbName}", which is not localhost.\n` +
+      'This suite WRITES enrolments and drip records, so a remote run leaves them behind.\n' +
+      'Set ALLOW_REMOTE_TEST_DB=1 if you meant it, and point it at a database you can throw away.\n'
+  );
+  process.exit(1);
+}
 
 if (mayDrop) {
   const mongoose = (await import('mongoose')).default;

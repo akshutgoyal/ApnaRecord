@@ -70,6 +70,11 @@ console.log(`   signing key   ${address}`);
 step(3, 'enrol — this deploys the account and drips 0.01 ETH, both real transactions');
 const enrolled = await post('/wallet/enrol', {
   address,
+  // Sent, not omitted. This suite used to enrol without a role, so every row it
+  // created looked like a registration whose selector had failed -- and the role path
+  // had no test at all. A caller that skips the input proves nothing about the feature
+  // that consumes it.
+  requestedRole: 'patient',
   sealed: sealed.sealed,
   salt: sealed.salt,
   iterations: sealed.iterations,
