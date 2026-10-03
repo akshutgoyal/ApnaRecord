@@ -22,7 +22,7 @@ import React, {
 } from 'react';
 import { BrowserProvider, Contract, Interface, getAddress, isAddress } from 'ethers';
 import { ABI, ACCOUNT_ABI, CONTRACT_ADDRESS, CHAIN_ID } from './contract';
-import { chainPermissions, recordsByOwner, setProofSigner, clearReadToken } from './services/api';
+import { chainPermissions, recordsByOwner, setProofSigner } from './services/api';
 import { DEMO_ACCOUNTS } from './config/demoAccounts';
 import {
   getLocalProvider,
@@ -306,10 +306,17 @@ export function ChainProvider({ children }) {
     return () => setProofSigner(null);
   }, [getSigner]);
 
-  // A different wallet must not inherit the previous one's read token.
-  useEffect(() => {
-    clearReadToken();
-  }, [account]);
+  // No eager clear here.
+  //
+  // This used to call clearReadToken() on every `account` change -- but `account` starts
+  // null and becomes an address on connect, so it fired on every mount and wiped the
+  // sessionStorage token that had just survived the navigation. The point of that token
+  // is that a route change costs no prompt.
+  //
+  // It was also redundant. authHeaders() reads the cached entry's own `address` and
+  // refuses it unless it matches the signer in hand, so a different wallet cannot inherit
+  // one regardless. The check lives where the token is used, which is the only place it
+  // can be trusted.
 
   /** A contract for reads: no signer, so MetaMask never prompts. */
   const readContract = useCallback(async () => {

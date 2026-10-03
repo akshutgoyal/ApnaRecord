@@ -18,7 +18,14 @@ import { isDbReady, SessionModel } from '../models/index.js';
  * The token is opaque and stores nothing but the viewer. Every request still asks the
  * chain what that viewer may see.
  */
-const SESSION_MS = 10 * 60 * 1000;
+// Long enough to outlast a working session, because the alternative is a MetaMask
+// prompt every ten minutes and that trains people to approve without reading.
+//
+// The trade is deliberate and bounded: this token can only READ, it is bound to one
+// viewer at issue and re-checked against the signer on every use, it lives in
+// sessionStorage so it dies with the tab, and the TTL index removes the row when it
+// lapses. A leaked one reveals what that wallet could already see.
+const SESSION_MS = 12 * 60 * 60 * 1000;
 
 export async function createSession(req, res) {
   if (!isDbReady()) {
