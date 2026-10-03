@@ -29,8 +29,8 @@ async function post(path, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
-async function get(path) {
-  const response = await fetch(`${API}${path}`, { headers: await proofHeaders() });
+async function get(path, signer = null) {
+  const response = await fetch(`${API}${path}`, { headers: await proofHeaders(signer) });
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
@@ -122,7 +122,9 @@ check('facility detail answers', detail.status === 200, `got ${detail.status}`);
 check('an unregistered facility reports itself honestly', detail.body.registeredOnChain === false, JSON.stringify(detail.body).slice(0, 120));
 check('with an empty link set', Array.isArray(detail.body.linkedPatients), JSON.stringify(detail.body).slice(0, 120));
 
-const links = await get(`/patients/${patient.address}/links`);
+// Signed AS the patient. The route is scoped to its subject, so asking about
+// someone else's links is a 403 — correct, and not what this assertion is about.
+const links = await get(`/patients/${patient.address}/links`, patient);
 check('patient links answer', links.status === 200, `got ${links.status}`);
 check('with linked and pending arrays', Array.isArray(links.body.linked) && Array.isArray(links.body.pending));
 

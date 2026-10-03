@@ -27,15 +27,19 @@ let section = '';
  */
 let proofWallet = null;
 
-export async function proofHeaders() {
+export async function proofHeaders(signer = null) {
   const { Wallet, getAddress, hexlify, randomBytes } = await import('ethers');
   const { READ_DOMAIN, READ_TYPES } = await import('../../server/src/lib/readProof.js');
 
+  // Pass a wallet when the endpoint is scoped to a subject: some reads ask "may this
+  // viewer see that patient", and an unrelated wallet is refused 403 for the right
+  // reason. Proving the wrong identity and asserting on the refusal tests nothing.
   if (!proofWallet) proofWallet = Wallet.createRandom();
-  const viewer = getAddress(proofWallet.address);
+  const wallet = signer || proofWallet;
+  const viewer = getAddress(wallet.address);
   const issuedAt = Date.now();
   const nonce = hexlify(randomBytes(32));
-  const signature = await proofWallet.signTypedData(READ_DOMAIN(), READ_TYPES, {
+  const signature = await wallet.signTypedData(READ_DOMAIN(), READ_TYPES, {
     tokenId: 0,
     viewer,
     issuedAt,
