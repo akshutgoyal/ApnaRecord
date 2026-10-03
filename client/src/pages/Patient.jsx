@@ -249,6 +249,29 @@ export default function Patient() {
       });
     });
 
+  /**
+   * Save the decrypted bytes.
+   *
+   * The reader has always offered this and this screen never did -- so an owner whose
+   * record is a Word document could neither preview it nor take it away. Locked out of
+   * their own file by a missing button.
+   *
+   * The bytes are already in memory and the blob is built from them here, so nothing
+   * leaves the browser that did the decryption.
+   */
+  const downloadViewing = () => {
+    if (!viewing?.bytes) return;
+    const blob = new Blob([viewing.bytes], { type: viewing.mimeType || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = viewing.fileName || `record-${viewing.tokenId}.bin`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
   if (!account) {
     return (
       <>
@@ -571,6 +594,11 @@ export default function Patient() {
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <Pill tone="slate">{viewing.recordType}</Pill>
             <Pill tone="slate">digest {viewing.recordHash?.slice(0, 14)}…</Pill>
+            {viewing.bytes && (
+              <button type="button" onClick={downloadViewing} className="btn-secondary text-xs">
+                Save {viewing.fileName || `record-${viewing.tokenId}`}
+              </button>
+            )}
           </div>
           {viewing.bytes && previewOf(viewing.mimeType, viewing.bytes) ? (
             <RecordPreview
@@ -584,8 +612,9 @@ export default function Patient() {
             </pre>
           ) : (
             <Callout tone="warn" title="Released, but not displayable here">
-              This record decrypted cleanly, but it is neither text nor a format a browser can
-              show — a DICOM, most likely. Its digest can still be verified on the Verify page.
+              This record decrypted cleanly, but a browser cannot show this format — a Word
+              document or a DICOM, most likely. Save it with the button above; it opens in
+              whatever app handles the type. Its digest can still be verified on the Verify page.
             </Callout>
           )}
         </Card>
