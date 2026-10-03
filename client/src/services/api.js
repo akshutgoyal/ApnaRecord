@@ -196,7 +196,7 @@ export const requestDrip = (address, payload) =>
 export const rotateRecovery = (address, payload) =>
   request(`/wallet/${address}/rotate-recovery`, { method: 'POST', body: JSON.stringify(payload) });
 
-export const chainIdentities = () => request('/chain/identities');
+export const chainIdentities = () => request('/chain/identities', { proof: true });
 export const chainPermissions = (address) => request(`/chain/permissions/${address}`);
 
 /**
@@ -263,7 +263,7 @@ export const getStats = ({ fresh = false, facility } = {}) => {
   if (fresh) params.set('fresh', '1');
   if (facility) params.set('facility', String(facility));
   const query = params.toString();
-  return request(`/stats${query ? `?${query}` : ''}`);
+  return request(`/stats${query ? `?${query}` : ''}`, { proof: true });
 };
 
 // ------------------------------------------------- directory (off-chain metadata)

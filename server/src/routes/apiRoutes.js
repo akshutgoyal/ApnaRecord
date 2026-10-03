@@ -98,14 +98,18 @@ router.get('/dripper', requireWallet, dripperHealth);
 
 // Chain reads. No wallet, no consent, no account.
 router.get('/chain/status', chainStatus);
-router.get('/chain/identities', chainIdentities);
+// Labels are off-chain. The chain knows a wallet holds a role; it does not know the
+// wallet is called "Patient 101". So this one needs a viewer, where the other chain
+// reads do not.
+router.get('/chain/identities', requireWallet, chainIdentities);
 router.get('/chain/permissions/:address', chainPermissions);
 router.get('/chain/events', chainEvents);
 // One record's own timeline — what a drill-down opens into.
 router.get('/chain/records/:tokenId/history', chainRecordHistory);
 
 // Dashboard aggregates, assembled from chain state.
-router.get('/stats', stats);
+// Aggregates the dashboards read, including off-chain labels and the patient list.
+router.get('/stats', requireWallet, stats);
 
 // Patient-owned display profiles. Off-chain convenience data: the chain records
 // that a wallet is "Patient 101", never a name. Writes are authorised by a wallet
