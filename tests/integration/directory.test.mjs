@@ -139,4 +139,44 @@ const scoped = await get(`/records?facility=${facility.address}`);
 check('a scoped read answers', scoped.status === 200, `got ${scoped.status}`);
 check('and marks itself scoped', scoped.body.scoped === true, JSON.stringify(scoped.body).slice(0, 120));
 
+// ---------------------------------------------------------------- the pending list
+//
+// The admin console's first request, and the only read that carries masked email
+// addresses. It used to take its own signature per call; it now takes the read token and
+// checks the role against the chain, so what matters is that the role check survived.
+//
+// Asserted by ERROR CODE rather than by "not 200". A 401 for the wrong reason looks
+// identical to a 401 for the right one, which is exactly how a real regression slipped
+// past a manual check earlier: the OTP limiter refused the request and the refusal read
+// like the binding rule working.
+group('the pending list is gated by wallet AND by role');
+
+// A raw fetch, NOT get(). get() attaches the harness's proof, so asking it for the
+// anonymous case actually asks as a wallet -- which is how this check first failed with
+// a 403 and read like a bug in the gate.
+const pendingAnonResponse = await fetch(`${API}/admin/pending`);
+const pendingAnon = {
+  status: pendingAnonResponse.status,
+  body: await pendingAnonResponse.json().catch(() => ({})),
+};
+check(
+  'an anonymous caller is refused, and told why',
+  pendingAnon.status === 401 && pendingAnon.body.error === 'ProofRequired',
+  `${pendingAnon.status} ${pendingAnon.body.error}`
+);
+
+const pendingStranger = await get('/admin/pending', stranger);
+check(
+  'a real wallet holding no role is refused with NotAuthorized',
+  pendingStranger.status === 403 && pendingStranger.body.error === 'NotAuthorized',
+  `${pendingStranger.status} ${pendingStranger.body.error}`
+);
+
+check(
+  'and the refusal names the address that was refused',
+  typeof pendingStranger.body.message === 'string' &&
+    pendingStranger.body.message.toLowerCase().includes(stranger.address.toLowerCase()),
+  pendingStranger.body.message
+);
+
 report();
