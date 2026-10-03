@@ -265,7 +265,20 @@ try {
 
 // ----------------------------------------------------------------- suites
 
-const suiteEnv = { API_URL: API, API_URL_2: API_2, MOCK_LOG: chainLog, CHAIN };
+// The suite signs read proofs, and the domain it signs against has to be the one the
+// server verifies with. Both sides read CONTRACT_ADDRESS and CHAIN_ID, so leaving them
+// out here meant the suite signed against a domain with no verifyingContract and every
+// proof was rejected as though it had been forged — which is exactly the failure
+// readProof.js warns about, presenting as a permissions bug rather than a config one.
+// Pinned to the same stub values serverEnv() uses.
+const suiteEnv = {
+  API_URL: API,
+  API_URL_2: API_2,
+  MOCK_LOG: chainLog,
+  CHAIN,
+  CONTRACT_ADDRESS: '0x0000000000000000000000000000000000000abc',
+  CHAIN_ID: '84532',
+};
 // The contract suite runs first and on its own EVM. It needs no server, no database and
 // no stub chain — it is the only suite that executes a contract rather than pretending
 // to, and it is where the account's behaviour is actually established.

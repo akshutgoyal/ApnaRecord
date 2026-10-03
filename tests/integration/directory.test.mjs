@@ -10,7 +10,7 @@
 // client consumes them.
 
 import { Wallet } from 'ethers';
-import { check, group, report } from '../support/harness.mjs';
+import { check, group, report, proofHeaders } from '../support/harness.mjs';
 import {
   identityMessage,
   facilityMessage,
@@ -21,6 +21,7 @@ const API = process.env.API_URL || 'http://localhost:5000/api';
 
 async function post(path, body) {
   const response = await fetch(`${API}${path}`, {
+    headers: await proofHeaders(),
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -29,7 +30,7 @@ async function post(path, body) {
 }
 
 async function get(path) {
-  const response = await fetch(`${API}${path}`);
+  const response = await fetch(`${API}${path}`, { headers: await proofHeaders() });
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 

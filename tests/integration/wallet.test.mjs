@@ -18,7 +18,7 @@ import {
   rotateRecoveryMessage as serverRotateMessage,
 } from '../../server/src/controllers/walletController.js';
 import { storeMessage as serverStoreMessage } from '../../server/src/controllers/recordController.js';
-import { check, group, report } from '../support/harness.mjs';
+import { check, group, report, proofHeaders } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
 const MOCK_LOG = process.env.MOCK_LOG || '/tmp/mock-chain.log';
@@ -32,7 +32,8 @@ async function post(path, body) {
   });
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
-const get = async (path) => (await fetch(`${API}${path}`)).json();
+// Reads now carry a proof: most of these endpoints return off-chain rows.
+const get = async (path) => (await fetch(`${API}${path}`, { headers: await proofHeaders() })).json();
 
 const unique = () => `w${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -16,7 +16,7 @@ import { Wallet } from 'ethers';
 import { createWallet, sealPrivateKey, generateRecoveryCode } from '../../client/src/lib/keystore.js';
 import { enrolMessage } from '../../client/src/lib/wireMessages.js';
 import { nonceWasUnused } from '../../server/src/services/dripper.js';
-import { check, group, report } from '../support/harness.mjs';
+import { check, group, report, proofHeaders } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
 const API_2 = process.env.API_URL_2;
@@ -142,7 +142,7 @@ check(
 );
 
 group('the float is still accounted for');
-const dripper = await (await fetch(`${API}/dripper`)).json();
+const dripper = await (await fetch(`${API}/dripper`, { headers: await proofHeaders() })).json();
 check('the dripper reports itself enabled', dripper.enabled === true, JSON.stringify(dripper).slice(0, 160));
 check(
   'the reported balance is a number the banner can print',
