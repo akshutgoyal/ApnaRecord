@@ -107,9 +107,21 @@ export default function Patient() {
     try {
       const { events } = await chainEvents({ limit: 200 });
       const candidates = new Set(DEMO_ACCOUNTS.map((a) => a.address));
+      // The expiry is NOT readable from a getter — the consent mapping is private by
+      // design, so the accepted graph cannot be enumerated. It travels on the
+      // AccessGranted event instead: the event list answers "until when", and the
+      // contract answers "is it open".
+      //
+      // First wins. The list is newest-first, so the first event for a pair is the most
+      // recent grant — a re-grant must beat the one it replaced.
+      const expiryFor = new Map();
       for (const event of events) {
         if (event.name === 'AccessGranted' && event.args?.viewer) {
           candidates.add(event.args.viewer);
+          const key = `${event.args.tokenId}:${String(event.args.viewer).toLowerCase()}`;
+          if (!expiryFor.has(key) && event.args.expiresAt) {
+            expiryFor.set(key, Number(event.args.expiresAt));
+          }
         }
         if (event.name === 'EmergencyAccessUsed' && event.args?.viewer) {
           candidates.add(event.args.viewer);
@@ -129,7 +141,10 @@ export default function Patient() {
               rows.push({
                 tokenId,
                 viewer,
-                expiresAt: null,
+                // Read, not assumed: `expiresAt: null` made every live grant render as
+                // "Consent: none", and `active: true` is only safe because canAccess just
+                // said so.
+                expiresAt: expiryFor.get(`${tokenId}:${viewer.toLowerCase()}`) ?? null,
                 active: true,
                 label:
                   DEMO_ACCOUNTS.find((a) => a.address.toLowerCase() === viewer.toLowerCase())?.label ||
