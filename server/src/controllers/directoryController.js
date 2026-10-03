@@ -335,21 +335,47 @@ export async function facilityDetail(req, res) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid facility address.' });
   }
   try {
-    const [onChain] = await call('facilities', [it]).catch(() => [false]);
+    // `null` means "could not ask", which is NOT "not registered". Collapsing the two
+    // reported a chain outage as a facility that does not exist — and the console then
+    // offers to register it, which reverts, with nothing to explain why.
+    let onChain = null;
+    try {
+      [onChain] = await call('facilities', [it]);
+    } catch {
+      onChain = null;
+    }
+    
     let directory = null;
-    let links = [];
+    let rows = [];
     if (isDbReady()) {
       directory = await FacilityModel.findOne({ it: it.toLowerCase() }).lean();
-      links = await PatientLinkModel.find({ facility: it.toLowerCase(), state: 'linked' }).lean();
+      rows = await PatientLinkModel.find({ facility: it.toLowerCase(), state: 'linked' }).lean();
     }
+    
+    // The mirror says who the facility believes it treats; the chain says who it may
+    // actually read. They disagree for up to a minute after a link, a discharge or a
+    // revocation — and the chain is the one that decides whether a read succeeds.
+    const linkedPatients = [];
+    let verifiedAgainstChain = true;
+    for (const row of rows) {
+      try {
+        const [stillLinked] = await call('facilityPatient', [it, row.patient]);
+        if (stillLinked) linkedPatients.push({ patient: row.patient, consentedAt: row.consentedAt });
+      } catch {
+        verifiedAgainstChain = false;
+        linkedPatients.push({ patient: row.patient, consentedAt: row.consentedAt });
+      }
+    }
+    
     return res.json({
       it: it.toLowerCase(),
-      registeredOnChain: Boolean(onChain),
+      registeredOnChain: onChain === null ? null : Boolean(onChain),
+      chainChecked: onChain !== null,
       name: directory?.name || null,
       active: directory?.active ?? null,
-      linkedPatients: links.map((l) => ({ patient: l.patient, consentedAt: l.consentedAt })),
-    });
-  } catch (error) {
+      linkedPatients,
+      verifiedAgainstChain,
+    });  } catch (error) {
     return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
   }
 }
@@ -368,16 +394,48 @@ export async function patientLinks(req, res) {
       it: { $in: rows.map((r) => r.facility) },
     }).lean();
     for (const f of facilities) names.set(f.it, f.name);
+    // The chain decides whether a link is LIVE. The mirror supplies the facility name and
+    // the timestamps, which the chain does not carry — but it trails the chain by up to a
+    // minute, so reading state from it meant a link approved moments ago still showed as
+    // "waiting for you", and one revoked on-chain still showed as open.
+    const linked = [];
+    const pending = [];
+    let verifiedAgainstChain = true;
+    
+    for (const row of rows) {
+      let onChain = null;
+      try {
+        const [value] = await call('facilityPatient', [row.facility, address]);
+        onChain = Boolean(value);
+      } catch {
+        // Could not ask. Fall back to the mirror, and SAY SO rather than letting a stale
+        // answer pass as a current one.
+        verifiedAgainstChain = false;
+      }
+    
+      const name = names.get(row.facility) || null;
+    
+      if (onChain === true) {
+        linked.push({ facility: row.facility, name, consentedAt: row.consentedAt });
+      } else if (onChain === false) {
+        // Not linked on chain. Still a request only if the mirror says one was made.
+        if (row.state === 'requested') {
+          pending.push({ facility: row.facility, name, requestedAt: row.requestedAt });
+        }
+      } else if (row.state === 'linked') {
+        linked.push({ facility: row.facility, name, consentedAt: row.consentedAt });
+      } else if (row.state === 'requested') {
+        pending.push({ facility: row.facility, name, requestedAt: row.requestedAt });
+      }
+    }
+    
     return res.json({
       patient: address.toLowerCase(),
-      linked: rows
-        .filter((r) => r.state === 'linked')
-        .map((r) => ({ facility: r.facility, name: names.get(r.facility) || null, consentedAt: r.consentedAt })),
-      pending: rows
-        .filter((r) => r.state === 'requested')
-        .map((r) => ({ facility: r.facility, name: names.get(r.facility) || null, requestedAt: r.requestedAt })),
-    });
-  } catch (error) {
+      linked,
+      pending,
+      // False when the contract could not be reached and the mirror was trusted alone.
+      verifiedAgainstChain,
+    });  } catch (error) {
     return res.status(500).json({ error: 'LinkReadFailed', message: error.message });
   }
 }
