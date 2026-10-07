@@ -173,6 +173,7 @@ const probeNonce = `0x${'11'.repeat(32)}`;
 const probeDeadline = 1234567890;
 const probeUpload = {
   actor: probe,
+  uploadId: `0x${'22'.repeat(32)}`,
   tokenId: 7,
   patient: probe,
   recordHash: probeDigest,
@@ -196,13 +197,15 @@ check(
 );
 check(
   'the upload signature binds every stored metadata and key field',
-  ['actor', 'tokenId', 'patient', 'recordHash', 'recordType', 'fileName', 'mimeType', 'contentKey', 'cid', 'plainHash'].every(
+  ['actor', 'uploadId', 'tokenId', 'patient', 'recordHash', 'recordType', 'fileName', 'mimeType', 'contentKey', 'cid', 'plainHash'].every(
     (key) => {
       const replacement =
         key === 'actor' || key === 'patient'
           ? '0x0000000000000000000000000000000000000002'
           : key === 'tokenId'
             ? 8
+            : key === 'uploadId'
+              ? `0x${'33'.repeat(32)}`
             : key === 'recordHash' || key === 'plainHash'
               ? `0x${'ef'.repeat(32)}`
               : `${probeUpload[key]}-changed`;

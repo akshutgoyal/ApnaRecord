@@ -31,12 +31,19 @@ const RecordSchema = new mongoose.Schema(
     plainHash: { type: String, default: '', lowercase: true, index: true },
     cid: { type: String, default: '' },
     // Content key, sealed under the server master key. Never the raw key.
-    sealedKey: { type: String, required: true },
+    // The chain indexer can discover a mint before its upload is confirmed and
+    // attached. An empty value means this server does not hold the content key.
+    sealedKey: { type: String, default: '' },
     fileName: { type: String, default: 'record.bin' },
     mimeType: { type: String, default: 'application/octet-stream' },
     sizeBytes: { type: Number, default: 0 },
     mintedAtBlock: { type: Number, default: 0 },
     mintedTx: { type: String, default: '' },
+    // Set only when a staged upload was attached to a verified mint receipt.
+    uploadId: { type: String, default: '', lowercase: true, index: true },
+    // Legacy rows may have been keyed by a predicted token ID before a mint. Their
+    // clinical fields stay hidden until the metadata is tied to the chain event.
+    metadataConfirmed: { type: Boolean, default: false, index: true },
     // The facility that minted it, or '' when the platform admin did. Mirrors the chain,
     // which stamps the same value from the minter — and it is the field the hospital's
     // read scope is derived from, since the chain cannot enforce reads.
@@ -44,6 +51,35 @@ const RecordSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+/**
+ * Upload metadata is kept separate from the public record cache until a successful
+ * on-chain mint receipt binds the staged bytes to the token the contract actually
+ * created. A short TTL makes abandoned pre-mint uploads self-cleaning in MongoDB;
+ * the encrypted blob itself remains keyed by its content digest.
+ */
+const UploadStageSchema = new mongoose.Schema(
+  {
+    uploadId: { type: String, required: true, unique: true, lowercase: true, index: true },
+    actor: { type: String, required: true, lowercase: true },
+    patient: { type: String, required: true, lowercase: true, index: true },
+    recordType: { type: String, required: true },
+    recordHash: { type: String, required: true, lowercase: true, index: true },
+    plainHash: { type: String, default: '', lowercase: true },
+    cid: { type: String, default: '' },
+    sealedKey: { type: String, required: true },
+    fileName: { type: String, default: 'record.bin' },
+    mimeType: { type: String, default: 'application/octet-stream' },
+    sizeBytes: { type: Number, default: 0 },
+    facility: { type: String, default: '', lowercase: true, index: true },
+    status: { type: String, enum: ['staged', 'confirmed'], default: 'staged', index: true },
+    tokenId: { type: Number, default: null },
+    mintedTx: { type: String, default: '' },
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: true }
+);
+UploadStageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const IdentitySchema = new mongoose.Schema(
   {
@@ -486,6 +522,8 @@ const SessionSchema = new mongoose.Schema(
 SessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const RecordModel = mongoose.models.Record || mongoose.model('Record', RecordSchema);
+export const UploadStageModel =
+  mongoose.models.UploadStage || mongoose.model('UploadStage', UploadStageSchema);
 export const SessionModel = mongoose.models.Session || mongoose.model('Session', SessionSchema);
 export const FacilityModel = mongoose.models.Facility || mongoose.model('Facility', FacilitySchema);
 export const PatientLinkModel =
@@ -508,6 +546,7 @@ export const DripLedgerModel =
 
 export const allModels = [
   RecordModel,
+  UploadStageModel,
   IdentityModel,
   FacilityModel,
   PatientLinkModel,

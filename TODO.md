@@ -10,7 +10,7 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 - [x] Bind profile, recovery, and upload signatures to operation-specific, chain/deployment-bound payloads, deadlines, and one-use nonces; authenticate encrypted bytes with their content key and prevent key replacement.
 - [x] Make OTP verification, contact-grant consumption, and related attempt accounting atomic under concurrent requests.
 - [x] Replace unsafe dripper nonce rewinds with durable cross-instance transaction state and exact-byte retry behavior.
-- [ ] Stage uploads under unique identifiers and bind metadata to the confirmed mint receipt; keep unconfirmed uploads out of record listings.
+- [x] Stage uploads under unique identifiers and bind metadata to the confirmed mint receipt; keep unconfirmed uploads out of record listings.
 - [ ] Authorize facility data against current chain links and roles, and make index catch-up complete and reorg-aware.
 - [ ] Bind request and identity directory metadata to confirmed chain events and immutable actors.
 - [ ] Decode the wallet identity tuple using the current contract ABI.
@@ -30,4 +30,5 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 - Queue item 4: signed profile, recovery, and upload writes bind the exact operation and stored data to the configured chain and contract, expire within five minutes, and atomically consume a shared nonce; uploads also validate their AES-GCM key and cannot replace a stored key with a different one.
 - Queue item 5: OTP consumption and wrong-attempt increments use conditional atomic updates, grants are consumed with a single-use claim, and rate limits use a shared atomic rolling-window row. Added cross-instance concurrency and per-contact cap coverage.
 - Queue item 6: a shared lease serializes dripper transactions, durable intents and signed bytes survive process failures, and uncertain sends resume by inspecting or rebroadcasting the same transaction. Old ambiguous counter state is refused instead of rewound.
+- Queue item 7: pre-mint uploads use random IDs and remain outside the record cache until the successful receipt, exact mint calldata, issuer, patient, digest, contract, and configured chain are verified. The upload ID is carried in the private CID field, legacy predicted-ID metadata stays hidden, and browser-side pending references support confirmation retry after reload.
 - Remaining fixes are to be handled in queue order. Update this file as each fix is committed.

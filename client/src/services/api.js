@@ -273,6 +273,10 @@ export const recordsByOwner = (address) => request(`/records/owner/${address}`, 
 export const storeRecord = (body) =>
   request('/records', { method: 'POST', body: JSON.stringify(body) });
 
+/** Bind staged upload metadata to the successful mint transaction receipt. */
+export const confirmRecordUpload = (body) =>
+  request('/records/confirm', { method: 'POST', body: JSON.stringify(body) });
+
 /**
  * The consent-gated release. A 403 here is not an error to apologise for — it is
  * the contract refusing, and the code tells you which rule it applied.

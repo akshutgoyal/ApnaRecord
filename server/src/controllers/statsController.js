@@ -468,7 +468,7 @@ const [identityList, allEvents, labels, profiles] = await Promise.all([
     try {
       const [dbRequests, dbRecords] = await Promise.all([
         RequestModel.find().lean().catch(() => []),
-        RecordModel.find().lean().catch(() => []),
+        RecordModel.find({ metadataConfirmed: true }).lean().catch(() => []),
       ]);
       requestRows = new Map(dbRequests.map((r) => [Number(r.requestId), r]));
       mintPatients = new Map(dbRecords.map((r) => [Number(r.tokenId), r]));

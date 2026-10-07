@@ -101,13 +101,15 @@ Profile writes and existing-record repairs require a recovered EOA signature to 
 
 ### 7. High — uploads race on the predicted next token ID
 
-References: `client/src/pages/Admin.jsx:400`, `:423`, `:439`; `server/src/controllers/recordController.js:334`, `:374`; `server/src/services/indexer.js:123`.
+References: `client/src/pages/Admin.jsx` mint flow; `server/src/controllers/recordController.js` upload staging and receipt confirmation; `server/src/services/indexer.js` record mirror.
 
 The browser reads `nextTokenId`, uploads a database row keyed by that ID, and separately submits `mintRecord`, which assigns whatever ID is next when it executes. Two issuers can stage different records for the same ID. A later upload overwrites the first row, and the later mint receives another ID. The indexer corrects patient and ciphertext hash but does not reconstruct the original file metadata or correct a record type copied from an overwritten row.
 
 Cancelled or failed mints also leave staged rows in the same collection served as the record index. Thus an upload can look like a live record before any mint exists.
 
 **Repair:** Stage by a unique upload ID/digest rather than a predicted token ID. After confirmation, bind metadata to the actual `RecordMinted` receipt and verify digest, recipient, issuer, contract, and chain. Serve confirmed records separately from staged uploads and clean up abandoned stages.
+
+**Status: repaired and committed.** New mint uploads use random upload IDs and remain in a TTL-backed staging collection. The signed upload ID is embedded in the contract CID field, and promotion verifies the successful receipt, configured chain and contract, exact mint calldata, issuer, patient, event digest, current owner, and on-chain digest. Only receipt-bound metadata enters the record cache; legacy predicted-ID metadata remains hidden until it is safely attached. The browser retains pending upload/transaction references so receipt confirmation can be retried after a reload.
 
 ### 8. High — facility metadata entitlement can survive discharge or role removal
 

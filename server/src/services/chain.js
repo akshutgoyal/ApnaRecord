@@ -481,8 +481,15 @@ export async function recordMeta(tokenId) {
     const { RecordModel, isDbReady } = await import('../models/index.js');
     if (isDbReady()) {
       const row = await RecordModel.findOne({ tokenId: Number(tokenId) }).lean();
-      recordType = row?.recordType || '';
-      facility = row?.facility || '';
+      const rowMatchesMint =
+        row?.metadataConfirmed === true &&
+        String(row.recordHash || '').toLowerCase() === String(parsed.args[1]).toLowerCase() &&
+        String(row.mintedTx || '').toLowerCase() === String(logs[0].transactionHash || '').toLowerCase() &&
+        patient && String(row.patient || '').toLowerCase() === String(patient).toLowerCase();
+      if (rowMatchesMint) {
+        recordType = row.recordType || '';
+        facility = row.facility || '';
+      }
     }
   } catch {
     /* metadata is a nicety; the digest and the owner are not */

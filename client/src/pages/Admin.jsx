@@ -4,10 +4,18 @@ import { isAddress, ZeroAddress } from 'ethers';
 import { useChain, describeError, contractError } from '../chain';
 import { CHAIN_ID, CONTRACT_ADDRESS } from '../contract';
 import { encryptRecord, digestOf, formatBytes, toBase64 } from '../crypto';
-import { chainIdentities, storeRecord, recordIdentity, recordFacility, pendingRegistrations } from '../services/api';
+import {
+  chainIdentities,
+  storeRecord,
+  confirmRecordUpload,
+  recordIdentity,
+  recordFacility,
+  pendingRegistrations,
+} from '../services/api';
 import {
   facilityMessage,
   identityMessage,
+  newUploadId,
   newSignatureNonce,
   storeMessage,
 } from '../lib/wireMessages';
@@ -28,6 +36,42 @@ import {
 } from '../components/ui';
 
 const RECORD_TYPES = ['MRI_SCAN', 'BLOOD_PANEL', 'XRAY', 'DISCHARGE_SUMMARY', 'PRESCRIPTION'];
+const PENDING_MINTS_KEY = 'apnarecord-pending-mints';
+
+function readPendingMints() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(PENDING_MINTS_KEY) || '[]');
+    return Array.isArray(value)
+      ? value.filter(
+          (entry) =>
+            /^0x[0-9a-f]{64}$/i.test(entry?.uploadId || '') &&
+            /^0x[0-9a-f]{64}$/i.test(entry?.txHash || '')
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberPendingMint(upload) {
+  try {
+    const current = readPendingMints().filter((entry) => entry.uploadId !== upload.uploadId);
+    window.localStorage.setItem(PENDING_MINTS_KEY, JSON.stringify([...current, upload].slice(-20)));
+  } catch {
+    /* Confirmation still runs in this page when browser storage is unavailable. */
+  }
+}
+
+function forgetPendingMint(uploadId) {
+  try {
+    window.localStorage.setItem(
+      PENDING_MINTS_KEY,
+      JSON.stringify(readPendingMints().filter((entry) => entry.uploadId !== uploadId))
+    );
+  } catch {
+    /* The stage expires server-side if the browser cannot persist the queue. */
+  }
+}
 
 export default function Admin() {
   const { account, roles, readContract, writeAs, simulateAs, signMessage, refresh, isDemo } = useChain();
@@ -120,6 +164,38 @@ export default function Admin() {
   useEffect(() => {
     if (account) loadPendingRef.current();
   }, [account]);
+
+  // A page can close after the wallet submits a mint but before the API binds its
+  // receipt. Keep only the random upload ID and transaction hash in local storage;
+  // the signed clinical metadata remains on the server in its private staging row.
+  useEffect(() => {
+    let cancelled = false;
+    const pendingMints = readPendingMints();
+    if (pendingMints.length === 0) return undefined;
+
+    void (async () => {
+      let completed = 0;
+      for (const pendingMint of pendingMints) {
+        try {
+          await confirmRecordUpload(pendingMint);
+          forgetPendingMint(pendingMint.uploadId);
+          completed += 1;
+        } catch (error) {
+          if (error.code === 'MintFailed' || error.code === 'UploadStageNotFound') {
+            forgetPendingMint(pendingMint.uploadId);
+          }
+        }
+      }
+      if (!cancelled && completed > 0) {
+        toast.ok('Mint metadata confirmed', 'The staged upload is now attached to its on-chain token.');
+        await refresh().catch(() => {});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /**
    * Register the identity and grant the role, in the order the contract demands.
@@ -408,23 +484,14 @@ export default function Admin() {
         const buffer = await mint.file.arrayBuffer();
         const { payload, digest, contentKey } = await encryptRecord(buffer);
 
-        // 2. Store the bytes first. If this fails we abort BEFORE minting, because
-        //    a token whose bytes nobody holds is worse than no token at all.
-        const contract = await readContract();
-        const tokenId = Number(await contract.nextTokenId());
+        // 2. Stage under a random ID. No predicted token number is sent or stored:
+        //    the successful receipt determines which token belongs to these bytes.
 
-        // The upload is signed. The token does not exist yet — it is about to be
-        // minted — so the server cannot check its owner; it checks that the signer
-        // holds the on-chain role that permits minting, and that this is the token
-        // actually next in line. The digest is in the statement, so the bytes cannot
-        // be swapped for different ones after signing.
-
-        // The content address, recorded both in the row and on-chain. It is a
-        // digest, not a location: the bytes may live in R2 or on disk, and the
-        // reader resolves them by recordHash. The old value claimed `local://`
-        // and truncated the digest to twelve hex characters — a lie about where
-        // it lived, and too short to identify it.
-        const cid = `sha256:${digest.slice(2)}`;
+        // The contract's private CID field carries the digest and upload ID. The
+        // digest names the encrypted bytes; the upload ID ties this exact stage to
+        // the mint calldata without publishing clinical metadata in the event log.
+        const uploadId = newUploadId();
+        const cid = `sha256:${digest.slice(2)}:upload:${uploadId.slice(2)}`;
 
         // The plaintext digest, so the public verify page works for the person who
         // registered the record. The chain anchors the ciphertext -- right for the blob,
@@ -434,8 +501,8 @@ export default function Admin() {
         const deadline = Date.now() + 5 * 60 * 1000;
         const nonce = newSignatureNonce();
         const upload = {
+          uploadId,
           actor: account,
-          tokenId,
           patient: mint.patient,
           recordHash: digest,
           recordType: mint.recordType,
@@ -451,20 +518,34 @@ export default function Admin() {
           storeMessage(upload, { chainId: CHAIN_ID, verifyingContract: CONTRACT_ADDRESS })
         );
 
-        await storeRecord({
+        const staged = await storeRecord({
           ...upload,
           ciphertext: toBase64(payload),
           signature,
         });
+        if (!staged?.staged || staged.uploadId !== uploadId) {
+          throw new Error('The upload was not staged for receipt confirmation; the mint was not submitted.');
+        }
 
-        // 3. Only the 32-byte digest goes on-chain. The record type stays in
-        //    the server row from step 2 — it is clinical data on a public log.
+        // 3. Only the 32-byte digest goes on-chain. Clinical metadata stays in
+        //    the private stage until this exact transaction is confirmed below.
         const tx = await writeAs('mintRecord', [
           mint.patient,
           digest,
           cid,
         ]);
+        const pendingMint = { uploadId, txHash: tx.hash };
+        rememberPendingMint(pendingMint);
         await tx.wait();
+        try {
+          await confirmRecordUpload(pendingMint);
+        } catch (error) {
+          error.message =
+            `Mint ${tx.hash} succeeded, but metadata confirmation is pending. ` +
+            `The Admin page will retry it on reload. ${error.message}`;
+          throw error;
+        }
+        forgetPendingMint(uploadId);
         setMint({ patient: '', recordType: 'MRI_SCAN', file: null });
       },
       {

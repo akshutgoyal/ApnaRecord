@@ -211,7 +211,12 @@ start(
   'chain',
   process.execPath,
   [path.join(HERE, 'support', 'mock-chain.mjs')],
-  { MOCK_PORT: String(CHAIN_PORT), MOCK_DRIPPER: dripper.address, MOCK_FLOAT: '10' },
+  {
+    MOCK_PORT: String(CHAIN_PORT),
+    MOCK_DRIPPER: dripper.address,
+    MOCK_FLOAT: '10',
+    CONTRACT_ADDRESS: '0x0000000000000000000000000000000000000abc',
+  },
   chainLog
 );
 
@@ -233,6 +238,7 @@ function serverEnv(port) {
     PORT: String(port),
     DATABASE_URL,
     RPC_URL: CHAIN,
+    CONTRACT_DEPLOY_BLOCK: '1000000',
     // Must match what tests/support/mock-chain.mjs reports for eth_chainId. It is
     // bound into the EIP-712 read domain, so a disagreement here would reject every
     // signed read — the same failure the production server now checks for at boot.

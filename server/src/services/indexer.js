@@ -13,7 +13,13 @@
 // own connection and close it, because the API already has one and the CLI does not.
 
 import { identities, events, recordMeta, call, blockTimestamps } from './chain.js';
-import { IdentityModel, ChainEventModel, RecordModel, PatientLinkModel } from '../models/index.js';
+import {
+  IdentityModel,
+  ChainEventModel,
+  RecordModel,
+  UploadStageModel,
+  PatientLinkModel,
+} from '../models/index.js';
 
 const LINK_EVENT_NAMES = ['PatientLinkRequested', 'PatientLinked', 'PatientUnlinked'];
 
@@ -119,18 +125,65 @@ export async function runIndexer({ log = () => {} } = {}) {
       continue;
     }
 
+    // A legacy predicted-token upload may have left clinical fields on a row that
+    // the chain later reused for a different mint. Only metadata attached by the
+    // receipt-confirmation path, and bound to this exact event, is retained.
+    const mintIdentity = {
+      tokenId,
+      patient: meta.patient.toLowerCase(),
+      recordHash: meta.recordHash.toLowerCase(),
+      mintedTx: String(meta.mintedTx || '').toLowerCase(),
+    };
+    const [confirmedStage, confirmedCache] = await Promise.all([
+      UploadStageModel.findOne({ status: 'confirmed', ...mintIdentity }).lean(),
+      RecordModel.findOne({ ...mintIdentity, metadataConfirmed: true, uploadId: { $gt: '' } }).lean(),
+    ]);
+    const trustedMetadata = confirmedStage || confirmedCache;
+    const fields = {
+      tokenId,
+      patient: meta.patient.toLowerCase(),
+      recordHash: meta.recordHash.toLowerCase(),
+      burned: false,
+      mintedAtBlock: meta.mintedAtBlock,
+      mintedTx: mintIdentity.mintedTx,
+    };
+    if (trustedMetadata) {
+      Object.assign(fields, {
+        recordType: trustedMetadata.recordType,
+        plainHash: trustedMetadata.plainHash || '',
+        cid: trustedMetadata.cid || '',
+        sealedKey: trustedMetadata.sealedKey || '',
+        fileName: trustedMetadata.fileName || 'record.bin',
+        mimeType: trustedMetadata.mimeType || 'application/octet-stream',
+        sizeBytes: trustedMetadata.sizeBytes || 0,
+        facility: trustedMetadata.facility || '',
+        uploadId: trustedMetadata.uploadId,
+        metadataConfirmed: true,
+      });
+    }
+
     await RecordModel.findOneAndUpdate(
       { tokenId },
       {
-        tokenId,
-        patient: meta.patient.toLowerCase(),
-        recordType: meta.recordType,
-        recordHash: meta.recordHash.toLowerCase(),
-        burned: false,
-        mintedAtBlock: meta.mintedAtBlock,
-        mintedTx: meta.mintedTx,
+        $set: fields,
+        // Without a bound upload, update chain facts while leaving legacy clinical
+        // fields untrusted and hidden. Defaults only apply to a new chain-only row.
+        $setOnInsert: trustedMetadata
+          ? {}
+          : {
+              recordType: 'UNSPECIFIED',
+              plainHash: '',
+              cid: '',
+              sealedKey: '',
+              fileName: 'record.bin',
+              mimeType: 'application/octet-stream',
+              sizeBytes: 0,
+              facility: '',
+              uploadId: '',
+              metadataConfirmed: false,
+            },
       },
-      { upsert: true, setDefaultsOnInsert: true }
+      { upsert: true, setDefaultsOnInsert: true, runValidators: true }
     );
     recordCount++;
   }

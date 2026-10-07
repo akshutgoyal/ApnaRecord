@@ -14,6 +14,7 @@ import {
   getRecord,
   listByOwner,
   storeRecord,
+  confirmRecordUpload,
   releaseFile,
 } from '../controllers/recordController.js';
 import {
@@ -120,6 +121,7 @@ router.delete('/profiles/:address', deleteProfile);
 // Record index and storage. Note: /owner/:address must precede /:tokenId.
 router.get('/records', optionalWallet, listRecords);
 router.post('/records', storeRecord);
+router.post('/records/confirm', confirmRecordUpload);
 router.get('/records/owner/:address', optionalWallet, listByOwner);
 router.get('/records/:tokenId', requireWallet, getRecord);
 

@@ -13,6 +13,8 @@ import { Transaction, formatEther, parseEther, Interface, id, getCreateAddress, 
 
 const PORT = Number(process.env.MOCK_PORT) || 8545;
 const DRIPPER = (process.env.MOCK_DRIPPER || '').toLowerCase();
+const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000abc').toLowerCase();
+let nextTokenId = Number(process.env.MOCK_NEXT_TOKEN_ID) || 1;
 // How many sends to accept but then report with a hash the client will reject.
 let badHashSends = Number(process.env.MOCK_BAD_HASH_COUNT) || 0;
 let rejectedSends = 0;
@@ -36,6 +38,8 @@ const READS = new Interface([
   'function facilityPatient(address,address) view returns (bool)',
   'function canAccess(uint256,address) view returns (bool)',
   'function viewRecord(uint256) view returns (string)',
+  'function mintRecord(address patient, bytes32 recordHash, string cid) returns (uint256)',
+  'event RecordMinted(uint256 indexed tokenId, bytes32 recordHash)',
 ]);
 
 const selector = (name) => READS.getFunction(name).selector.toLowerCase();
@@ -50,6 +54,8 @@ const recordCounts = new Map();
 // stub deliberately does not parse deployment calldata to find it.
 const accountOwners = new Map();
 const roleAssignments = new Map();
+const recordOwners = new Map();
+const recordHashes = new Map();
 
 const balances = new Map();
 const nonces = new Map();
@@ -87,6 +93,45 @@ function handle(message) {
       roleAssignments.set(`${String(role).toLowerCase()}:${at(account)}`, Boolean(held));
       return true;
     }
+    case 'mock_mintRecord': {
+      const [patient, digest, cid, issuer] = message.params || [];
+      const tokenId = nextTokenId++;
+      recordOwners.set(tokenId, String(patient).toLowerCase());
+      recordHashes.set(tokenId, String(digest).toLowerCase());
+      const txHash = id(`mock-mint:${tokenId}:${digest}:${cid}:${Date.now()}`);
+      const blockNumber = 1_000_000 + sent.length;
+      const event = READS.encodeEventLog(READS.getEvent('RecordMinted'), [BigInt(tokenId), digest]);
+      const callData = READS.encodeFunctionData('mintRecord', [patient, digest, cid]);
+      receipts.set(txHash, {
+        transactionHash: txHash,
+        transactionIndex: '0x0',
+        blockNumber: hex(blockNumber),
+        blockHash: `0x${'bc'.repeat(32)}`,
+        from: issuer || patient,
+        to: CONTRACT_ADDRESS,
+        input: callData,
+        data: callData,
+        cumulativeGasUsed: hex(100000),
+        gasUsed: hex(100000),
+        effectiveGasPrice: hex(1_000_000_000),
+        contractAddress: null,
+        logs: [{
+          address: CONTRACT_ADDRESS,
+          topics: event.topics,
+          data: event.data,
+          blockNumber: hex(blockNumber),
+          blockHash: `0x${'bc'.repeat(32)}`,
+          transactionHash: txHash,
+          transactionIndex: '0x0',
+          logIndex: '0x0',
+          removed: false,
+        }],
+        logsBloom: `0x${'00'.repeat(256)}`,
+        status: '0x1',
+        type: '0x2',
+      });
+      return { txHash, tokenId };
+    }
     case 'mock_failNextSendResponse':
       badHashSends += 1;
       return true;
@@ -102,7 +147,9 @@ function handle(message) {
     case 'eth_getBalance':
       return hex(balances.get(at(message.params?.[0])) ?? 0n);
     case 'eth_getCode':
-      return contractCodes.get(at(message.params?.[0])) || '0x';
+      return at(message.params?.[0]) === CONTRACT_ADDRESS
+        ? '0x6000'
+        : contractCodes.get(at(message.params?.[0])) || '0x';
     case 'eth_getTransactionCount':
       return hex(nonces.get(at(message.params?.[0])) ?? 0);
     case 'eth_estimateGas':
@@ -153,10 +200,13 @@ function handle(message) {
       // with zeros would claim every token is owned by address(0) and quietly send
       // every upload down the wrong branch.
       if (which === selector('ownerOf')) {
+        const [tokenId] = READS.decodeFunctionData('ownerOf', data);
+        const owner = recordOwners.get(Number(tokenId));
+        if (owner) return READS.encodeFunctionResult('ownerOf', [owner]);
         return { __revert: 'ERC721NonexistentToken(uint256)' };
       }
       if (which === selector('nextTokenId')) {
-        return READS.encodeFunctionResult('nextTokenId', [BigInt(process.env.MOCK_NEXT_TOKEN_ID || 1)]);
+        return READS.encodeFunctionResult('nextTokenId', [BigInt(nextTokenId)]);
       }
       if (which === selector('hasRole')) {
         const [role, account] = READS.decodeFunctionData('hasRole', data);
@@ -167,7 +217,12 @@ function handle(message) {
         );
       }
       if (which === selector('verifyRecord')) {
-        return READS.encodeFunctionResult('verifyRecord', [process.env.MOCK_VERIFY_RECORD !== 'false']);
+        const [tokenId, digest] = READS.decodeFunctionData('verifyRecord', data);
+        const knownDigest = recordHashes.get(Number(tokenId));
+        const matches = knownDigest
+          ? knownDigest === String(digest).toLowerCase()
+          : process.env.MOCK_VERIFY_RECORD !== 'false';
+        return READS.encodeFunctionResult('verifyRecord', [matches]);
       }
       if (which === selector('DEFAULT_ADMIN_ROLE')) {
         return READS.encodeFunctionResult('DEFAULT_ADMIN_ROLE', [id('DEFAULT_ADMIN_ROLE')]);
@@ -237,7 +292,18 @@ function handle(message) {
         gasLimit: hex(21000),
         gasPrice: hex(1_000_000_000),
         type: '0x2',
+        input: receipt.input || receipt.data || '0x',
       };
+    }
+    case 'eth_getLogs': {
+      const filter = message.params?.[0] || {};
+      return [...receipts.values()]
+        .flatMap((receipt) => receipt.logs || [])
+        .filter((log) => !filter.address || at(filter.address) === at(log.address))
+        .filter((log) => {
+          const topics = filter.topics || [];
+          return topics.every((topic, index) => !topic || String(topic).toLowerCase() === String(log.topics[index] || '').toLowerCase());
+        });
     }
     case 'eth_sendRawTransaction': {
       const tx = Transaction.from(message.params[0]);

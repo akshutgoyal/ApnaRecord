@@ -1,7 +1,15 @@
 import { createDecipheriv } from 'node:crypto';
 import { ethers } from 'ethers';
-import { RecordModel, isDbReady } from '../models/index.js';
-import { recordMeta, tokensOf, call, verifyRecord } from '../services/chain.js';
+import { RecordModel, UploadStageModel, isDbReady } from '../models/index.js';
+import {
+  recordMeta,
+  tokensOf,
+  call,
+  verifyRecord,
+  getProvider,
+  getAddress as getContractAddress,
+  getInterface,
+} from '../services/chain.js';
 import { entitledPatients } from '../middleware/requireWallet.js';
 import {
   claimOneUseNonce,
@@ -21,6 +29,7 @@ import {
 const MAX_BYTES = 20 * 1024 * 1024; // 20 MB of ciphertext per request
 const GCM_IV_BYTES = 12;
 const GCM_TAG_BYTES = 16;
+const UPLOAD_STAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Authenticate and hash the browser's AES-GCM payload with its submitted key. */
 function decryptPayloadHash(payload, contentKeyHex) {
@@ -46,6 +55,7 @@ function decryptPayloadHash(payload, contentKeyHex) {
  */
 export function storePayloadHash({
   actor,
+  uploadId,
   tokenId,
   patient,
   recordHash,
@@ -58,7 +68,8 @@ export function storePayloadHash({
 }) {
   const values = [
     ethers.getAddress(actor),
-    Number(tokenId),
+    String(uploadId).toLowerCase(),
+    tokenId == null || tokenId === '' ? '' : Number(tokenId),
     ethers.getAddress(patient),
     String(recordHash).toLowerCase(),
     String(recordType || 'UNSPECIFIED'),
@@ -72,16 +83,17 @@ export function storePayloadHash({
 }
 
 export function storeMessage(
-  { actor, tokenId, patient, recordHash, deadline, nonce, ...payload },
+  { actor, uploadId, tokenId, patient, recordHash, deadline, nonce, ...payload },
   domain = signedWriteDomain()
 ) {
-  const dataHash = storePayloadHash({ actor, tokenId, patient, recordHash, ...payload });
+  const dataHash = storePayloadHash({ actor, uploadId, tokenId, patient, recordHash, ...payload });
   return (
     'ApnaRecord store record\n' +
     `chainId: ${domain.chainId}\n` +
     `verifyingContract: ${domain.verifyingContract}\n` +
     `actor: ${ethers.getAddress(actor)}\n` +
-    `tokenId: ${Number(tokenId)}\n` +
+    `uploadId: ${String(uploadId).toLowerCase()}\n` +
+    `tokenId: ${tokenId == null || tokenId === '' ? 'staged' : Number(tokenId)}\n` +
     `patient: ${ethers.getAddress(patient)}\n` +
     `recordHash: ${String(recordHash).toLowerCase()}\n` +
     `payloadHash: ${dataHash}\n` +
@@ -131,11 +143,15 @@ export async function listRecords(req, res) {
 
     if (isDbReady()) {
       const docs = await RecordModel.find().sort({ tokenId: 1 }).lean();
-      if (docs.length > 0) {
+      // Rows created by the older predicted-token upload flow can have a tokenId
+      // before the chain has ever minted it. They have no mint transaction and
+      // must never become a browse result. Falling through lets the chain decide.
+      const confirmedChainRows = docs.filter((d) => d.mintedTx);
+      if (confirmedChainRows.length > 0 && confirmedChainRows.length === docs.length) {
         return res.json({
           source: 'database',
           ...(scope ? { facility: facility.toLowerCase(), scoped: true } : {}),
-          records: docs
+          records: confirmedChainRows
             .filter((d) => inScope(d.patient))
             .map((d) => ({
               tokenId: d.tokenId,
@@ -143,7 +159,7 @@ export async function listRecords(req, res) {
               recordHash: d.recordHash,
               // Spread only when entitled, so an anonymous caller cannot even see the keys —
               // a null field would still tell them a file name exists.
-              ...(maySeeOffChain(d.patient)
+              ...(d.metadataConfirmed && maySeeOffChain(d.patient)
                 ? {
                     recordType: d.recordType,
                     cid: d.cid,
@@ -207,7 +223,14 @@ export async function getRecord(req, res) {
     if (!meta) return res.status(404).json({ error: 'RecordNotFound', message: 'No such record.' });
 
     let cached = null;
-    if (isDbReady()) cached = await RecordModel.findOne({ tokenId }).lean();
+    if (isDbReady()) {
+      cached = await RecordModel.findOne({
+        tokenId,
+        recordHash: String(meta.recordHash).toLowerCase(),
+        mintedTx: String(meta.mintedTx || '').toLowerCase(),
+        metadataConfirmed: true,
+      }).lean();
+    }
     if (!cached && !(await hasBlob(meta.recordHash))) {
       // The token exists on-chain but this server never held the bytes.
       meta.blobMissing = true;
@@ -271,16 +294,14 @@ export async function listByOwner(req, res) {
 
 /**
  * POST /api/records
- * Store a record the BROWSER already encrypted. The server receives ciphertext,
- * seals the content key, and never sees the plaintext at rest.
- *
- * Body: { actor, tokenId, patient, recordType, fileName, mimeType, contentKey, ciphertext, deadline, nonce, signature }
- *       contentKey  — hex, 32 bytes, generated in the browser
- *       ciphertext  — base64 of `iv || ciphertext || tag`
+ * Store browser-encrypted bytes. New mints are staged by a random upload ID and
+ * are not inserted into the public record cache until /records/confirm verifies
+ * the successful receipt and the RecordMinted event it contains.
  */
 export async function storeRecord(req, res) {
   try {
     const {
+      uploadId,
       actor,
       tokenId,
       patient,
@@ -295,23 +316,24 @@ export async function storeRecord(req, res) {
       nonce,
       signature,
     } = req.body || {};
+    const hasTokenId = tokenId !== undefined && tokenId !== null && tokenId !== '';
+    const normalizedTokenId = hasTokenId ? Number(tokenId) : null;
 
-    if (!Number.isInteger(Number(tokenId)) || Number(tokenId) <= 0) {
-      return res.status(400).json({ error: 'BadRequest', message: 'tokenId is required.' });
+    if (typeof uploadId !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(uploadId)) {
+      return res.status(400).json({ error: 'BadRequest', message: 'uploadId must be 32 bytes of hex.' });
+    }
+    if (hasTokenId && (!Number.isSafeInteger(normalizedTokenId) || normalizedTokenId <= 0)) {
+      return res.status(400).json({ error: 'BadRequest', message: 'tokenId must be a positive safe integer when repairing an existing record.' });
     }
     if (typeof contentKey !== 'string' || !/^[0-9a-fA-F]{64}$/.test(contentKey)) {
       return res.status(400).json({ error: 'BadRequest', message: 'contentKey must be 32 bytes of hex.' });
     }
-    // Optional, and only used by the public verify page. A plaintext digest is a hash,
-    // not a file, so accepting it does not put the scan anywhere near the server.
     if (plainHash != null && plainHash !== '' && !/^0x[0-9a-fA-F]{64}$/.test(plainHash)) {
       return res.status(400).json({ error: 'BadRequest', message: 'plainHash must be 0x + 64 hex chars.' });
     }
     if (typeof ciphertext !== 'string' || ciphertext.length === 0) {
       return res.status(400).json({ error: 'BadRequest', message: 'ciphertext is required.' });
     }
-    // Validated before it is used to build a signed message, because getting this
-    // wrong throws inside message construction and would surface as a 500.
     if (!ethers.isAddress(actor)) {
       return res.status(400).json({ error: 'BadRequest', message: 'actor must be a wallet or account address.' });
     }
@@ -347,11 +369,11 @@ export async function storeRecord(req, res) {
       });
     }
 
-    // The digest the browser put on-chain must be keccak256 of these exact bytes.
     const digest = ethers.keccak256(payload);
     const signedPayload = {
+      uploadId: uploadId.toLowerCase(),
       actor: ethers.getAddress(actor),
-      tokenId: Number(tokenId),
+      tokenId: normalizedTokenId,
       patient: ethers.getAddress(patient),
       recordHash: digest,
       recordType: recordType || 'UNSPECIFIED',
@@ -361,32 +383,6 @@ export async function storeRecord(req, res) {
       cid: cid || '',
       plainHash: String(plainHash || '').toLowerCase(),
     };
-
-    // ---------------------------------------------------------------------
-    // WHO IS ASKING, AND WHETHER THE CHAIN AGREES.
-    //
-    // This endpoint used to accept anything: an unauthenticated caller could write a
-    // row naming any token and any patient. The bytes are still stored before the
-    // token is minted — deliberately, since a token whose bytes nobody holds is worse
-    // than no token — so there are two cases and they need different evidence.
-    //
-    //   • The token EXISTS. This is a re-upload or a repair. The contract's owner
-    //     signs, and the bytes must hash to what the chain already recorded.
-    //
-    //   • The token does NOT exist yet. This is the ordinary mint flow. Only an
-    //     account holding DEFAULT_ADMIN_ROLE can mint it, so only such an account may
-    //     store its bytes — and only for the token actually next in line, so an
-    //     upload cannot be parked against some future id.
-    // ---------------------------------------------------------------------
-    let onChainOwner = null;
-    try {
-      const [owner] = await call('ownerOf', [Number(tokenId)]);
-      onChainOwner = owner;
-    } catch {
-      // Reverts for a token that does not exist yet, which is a legitimate state here
-      // rather than an error. Anything else would have thrown further up.
-      onChainOwner = null;
-    }
 
     const statement = storeMessage({ ...signedPayload, deadline, nonce });
     const authorization = await verifyDeadlineMessage({
@@ -399,50 +395,62 @@ export async function storeRecord(req, res) {
     if (authorization.error) {
       return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
     }
+    if (
+      !hasTokenId &&
+      signedPayload.cid !== `sha256:${digest.slice(2)}:upload:${signedPayload.uploadId.slice(2)}`
+    ) {
+      return res.status(400).json({
+        error: 'UploadBindingMismatch',
+        message: 'A staged upload CID must bind its content digest to its uploadId.',
+      });
+    }
 
-    // The facility that staged these bytes, for the hospital read scope.
-    // The platform mints anywhere and stamps nothing.
     let minterFacility = '';
-
-    if (onChainOwner) {
-      if (actor.toLowerCase() !== onChainOwner.toLowerCase()) {
+    let existingMeta = null;
+    if (hasTokenId) {
+      existingMeta = await recordMeta(normalizedTokenId);
+      if (!existingMeta) {
+        return res.status(404).json({ error: 'RecordNotFound', message: `Token ${normalizedTokenId} has not been minted.` });
+      }
+      if (!existingMeta.patient) {
+        return res.status(409).json({ error: 'RecordRevoked', message: `Token ${normalizedTokenId} has been revoked.` });
+      }
+      if (actor.toLowerCase() !== String(existingMeta.patient).toLowerCase()) {
         return res.status(403).json({
           error: 'NotRecordOwner',
-          message: `Token ${tokenId} is owned by ${onChainOwner}; its owner account must authorize this upload.`,
+          message: `Token ${normalizedTokenId} is owned by ${existingMeta.patient}; its owner account must authorize this upload.`,
         });
       }
-
-      if (onChainOwner.toLowerCase() !== String(patient).toLowerCase()) {
+      if (String(existingMeta.patient).toLowerCase() !== signedPayload.patient.toLowerCase()) {
         return res.status(409).json({
           error: 'PatientMismatch',
-          message: `Token ${tokenId} belongs to ${onChainOwner}, not ${patient}. The chain is the authority here.`,
+          message: `Token ${normalizedTokenId} belongs to ${existingMeta.patient}, not ${patient}. The chain is the authority here.`,
         });
       }
-
-      const [matches] = await verifyRecord(Number(tokenId), digest);
+      if (String(existingMeta.recordHash).toLowerCase() !== digest.toLowerCase()) {
+        return res.status(409).json({ error: 'DigestMismatch', message: 'These bytes do not hash to the digest recorded on-chain for this token.' });
+      }
+      const [matches] = await verifyRecord(normalizedTokenId, digest);
       if (!matches) {
         return res.status(409).json({
           error: 'DigestMismatch',
-          message:
-            'These bytes do not hash to the digest recorded on-chain for this token, so storing ' +
-            'them would attach the wrong document to a medical record.',
+          message: 'These bytes do not hash to the digest recorded on-chain for this token.',
         });
       }
+      minterFacility = existingMeta?.facility || '';
     } else {
-      const [nextId] = await call('nextTokenId');
-      if (Number(tokenId) !== Number(nextId)) {
-        return res.status(400).json({
-          error: 'NotNextToken',
-          message: `Token ${tokenId} does not exist and is not next in line (${nextId}). Bytes can only be stored ahead of the mint that will create them.`,
+      // Pre-mint uploads need durable staging metadata. Without MongoDB the client
+      // must stop before minting rather than create a token with unbindable metadata.
+      if (!isDbReady()) {
+        return res.status(503).json({
+          error: 'UploadStageUnavailable',
+          message: 'Upload staging is unavailable while the database is offline; no mint should be submitted yet.',
         });
       }
 
       const [adminRole] = await call('DEFAULT_ADMIN_ROLE');
       const [isAdmin] = await call('hasRole', [adminRole, actor]);
       if (!isAdmin) {
-        // A hospital may stage bytes for a patient it is currently linked to —
-        // the same gate as `mintRecord` on-chain, re-checked here so a row
-        // cannot be parked for a mint the chain would refuse.
         const [hospitalRole] = await call('HOSPITAL_ROLE');
         const [isHospital] = await call('hasRole', [hospitalRole, actor]);
         let linked = false;
@@ -457,9 +465,7 @@ export async function storeRecord(req, res) {
         if (!linked) {
           return res.status(403).json({
             error: 'NotMintingRole',
-            message:
-              'This token has not been minted yet, so the uploader must be an account that can mint ' +
-              'it — the platform, or a hospital currently linked to this patient.',
+            message: 'The uploader must be a platform admin or a hospital currently linked to this patient.',
           });
         }
         minterFacility = actor.toLowerCase();
@@ -486,42 +492,257 @@ export async function storeRecord(req, res) {
     const { stored } = await putBlob(digest, payload);
     await putSealedKey(digest, sealKey(signedPayload.contentKey));
 
-    if (isDbReady()) {
+    if (hasTokenId) {
       await RecordModel.findOneAndUpdate(
-        { tokenId: Number(tokenId) },
+        { tokenId: normalizedTokenId },
         {
-          tokenId: Number(tokenId),
-          patient: signedPayload.patient.toLowerCase(),
-          recordType: signedPayload.recordType,
-          recordHash: digest,
-          plainHash: signedPayload.plainHash,
-          cid: signedPayload.cid,
-          sealedKey: '(on disk)',
-          fileName: signedPayload.fileName,
-          mimeType: signedPayload.mimeType,
-          sizeBytes: payload.length,
-          facility: minterFacility || '',
+          $set: {
+            tokenId: normalizedTokenId,
+            patient: signedPayload.patient.toLowerCase(),
+            recordType: signedPayload.recordType,
+            recordHash: digest,
+            plainHash: signedPayload.plainHash,
+            cid: signedPayload.cid,
+            sealedKey: '(on disk)',
+            fileName: signedPayload.fileName,
+            mimeType: signedPayload.mimeType,
+            sizeBytes: payload.length,
+            facility: minterFacility,
+            ...(existingMeta
+              ? {
+                  mintedAtBlock: existingMeta.mintedAtBlock,
+                  mintedTx: String(existingMeta.mintedTx || '').toLowerCase(),
+                }
+              : {}),
+            uploadId: signedPayload.uploadId,
+            metadataConfirmed: true,
+            burned: false,
+          },
         },
-        { upsert: true, new: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
       );
+    } else {
+      await UploadStageModel.create({
+        uploadId: signedPayload.uploadId,
+        actor: signedPayload.actor.toLowerCase(),
+        patient: signedPayload.patient.toLowerCase(),
+        recordType: signedPayload.recordType,
+        recordHash: digest,
+        plainHash: signedPayload.plainHash,
+        cid: signedPayload.cid,
+        sealedKey: '(on disk)',
+        fileName: signedPayload.fileName,
+        mimeType: signedPayload.mimeType,
+        sizeBytes: payload.length,
+        facility: minterFacility,
+        expiresAt: new Date(Date.now() + UPLOAD_STAGE_TTL_MS),
+      });
     }
 
     return res.status(201).json({
       ok: true,
-      tokenId: Number(tokenId),
+      uploadId: signedPayload.uploadId,
+      ...(hasTokenId ? { tokenId: normalizedTokenId, staged: false } : { staged: true }),
       recordHash: digest,
       sizeBytes: payload.length,
       alreadyStored: !stored,
       cachedInDatabase: isDbReady(),
-      verified:
-        'The uploader\'s signature was checked, and either the token\'s on-chain owner signed or ' +
-        'a minting account signed, with the bytes hashing to the on-chain digest.',
+      verified: hasTokenId
+        ? 'The owner signature and the existing chain record were checked against these bytes.'
+        : 'The signed upload and minting role were checked. The metadata remains staged until a successful mint receipt is confirmed.',
     });
   } catch (error) {
     if (error?.code === 'CONTENT_KEY_CONFLICT') {
       return res.status(409).json({ error: 'ContentKeyConflict', message: error.message });
     }
+    if (error?.code === 11000) {
+      return res.status(409).json({ error: 'UploadIdUsed', message: 'This uploadId has already been used.' });
+    }
     return res.status(500).json({ error: 'StorageFailed', message: error.message });
+  }
+}
+
+/**
+ * POST /api/records/confirm
+ * Bind one staged upload to the token actually minted by a successful transaction.
+ */
+export async function confirmRecordUpload(req, res) {
+  try {
+    const uploadId = String(req.body?.uploadId || '').toLowerCase();
+    const txHash = String(req.body?.txHash || '').toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(uploadId) || !/^0x[0-9a-f]{64}$/.test(txHash)) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'uploadId and txHash must each be 32 bytes of hex.',
+      });
+    }
+    if (!isDbReady()) {
+      return res.status(503).json({ error: 'UploadStageUnavailable', message: 'Upload staging is unavailable while the database is offline.' });
+    }
+
+    const stage = await UploadStageModel.findOne({ uploadId }).lean();
+    if (!stage || new Date(stage.expiresAt).getTime() <= Date.now()) {
+      return res.status(404).json({ error: 'UploadStageNotFound', message: 'This staged upload is missing or expired.' });
+    }
+    if (stage.status === 'confirmed' && String(stage.mintedTx).toLowerCase() !== txHash) {
+      return res.status(409).json({ error: 'UploadAlreadyConfirmed', message: 'This upload is already bound to a different mint transaction.' });
+    }
+
+    const receipt = await getProvider().getTransactionReceipt(txHash);
+    if (!receipt) {
+      return res.status(409).json({ error: 'MintNotConfirmed', message: 'The mint transaction has no confirmed receipt yet. Retry after it is mined.' });
+    }
+    if (String(receipt.hash || receipt.transactionHash || '').toLowerCase() !== txHash) {
+      return res.status(409).json({ error: 'MintReceiptMismatch', message: 'The node returned a receipt for a different transaction.' });
+    }
+    if (Number(receipt.status) !== 1) {
+      return res.status(409).json({ error: 'MintFailed', message: 'The mint transaction did not succeed.' });
+    }
+    const network = await getProvider().getNetwork();
+    if (Number(network.chainId) !== Number(process.env.CHAIN_ID)) {
+      return res.status(503).json({ error: 'ChainMismatch', message: 'The configured RPC is connected to a different chain.' });
+    }
+
+    const contractAddress = getContractAddress().toLowerCase();
+    const iface = getInterface();
+    const transaction = await getProvider().getTransaction(txHash);
+    if (!transaction) {
+      return res.status(409).json({ error: 'MintTransactionUnavailable', message: 'The mint transaction data is not available yet.' });
+    }
+    if (String(transaction.hash || '').toLowerCase() !== txHash) {
+      return res.status(409).json({ error: 'MintTransactionMismatch', message: 'The node returned transaction data for a different hash.' });
+    }
+    let callTarget = String(transaction.to || '').toLowerCase();
+    let callData = transaction.data;
+    let issuer = String(transaction.from || '').toLowerCase();
+    if (callTarget !== contractAddress) {
+      const accountInterface = new ethers.Interface([
+        'function execute(address target, uint256 value, bytes data) returns (bytes)',
+      ]);
+      let accountCall;
+      try {
+        accountCall = accountInterface.parseTransaction({ data: callData });
+      } catch {
+        accountCall = null;
+      }
+      if (accountCall?.name !== 'execute') {
+        return res.status(409).json({ error: 'MintCallMismatch', message: 'The receipt transaction did not call the record contract mint function.' });
+      }
+      issuer = callTarget;
+      callTarget = String(accountCall.args.target).toLowerCase();
+      callData = accountCall.args.data;
+    }
+    if (issuer !== String(stage.actor).toLowerCase()) {
+      return res.status(409).json({ error: 'MintIssuerMismatch', message: 'The mint transaction was not submitted by the account that signed this staged upload.' });
+    }
+    let mintCall;
+    try {
+      if (callTarget === contractAddress) mintCall = iface.parseTransaction({ data: callData });
+    } catch {
+      mintCall = null;
+    }
+    if (
+      mintCall?.name !== 'mintRecord' ||
+      String(mintCall.args.patient).toLowerCase() !== String(stage.patient).toLowerCase() ||
+      String(mintCall.args.recordHash).toLowerCase() !== String(stage.recordHash).toLowerCase() ||
+      String(mintCall.args.cid) !== String(stage.cid)
+    ) {
+      return res.status(409).json({ error: 'MintCallMismatch', message: 'The mint call does not match the patient, digest, and upload identifier in this stage.' });
+    }
+
+    const mintedEvents = [];
+    for (const log of receipt.logs || []) {
+      if (String(log.address || '').toLowerCase() !== contractAddress) continue;
+      if (log.transactionHash && String(log.transactionHash).toLowerCase() !== txHash) continue;
+      try {
+        const parsed = iface.parseLog(log);
+        if (parsed?.name === 'RecordMinted') mintedEvents.push(parsed);
+      } catch {
+        /* a log from this contract can be a different event */
+      }
+    }
+    const matchingEvents = mintedEvents.filter(
+      (event) => String(event.args.recordHash).toLowerCase() === String(stage.recordHash).toLowerCase()
+    );
+    if (matchingEvents.length !== 1) {
+      return res.status(409).json({ error: 'MintReceiptMismatch', message: 'The receipt must contain exactly one RecordMinted event for these staged bytes.' });
+    }
+    const tokenId = Number(matchingEvents[0].args.tokenId);
+    if (!Number.isSafeInteger(tokenId) || tokenId <= 0) {
+      return res.status(409).json({ error: 'MintReceiptMismatch', message: 'The receipt contains an invalid token ID.' });
+    }
+
+    const [owner] = await call('ownerOf', [tokenId]);
+    if (String(owner).toLowerCase() !== String(stage.patient).toLowerCase()) {
+      return res.status(409).json({ error: 'MintPatientMismatch', message: 'The minted token is not owned by the patient named in the staged upload.' });
+    }
+    const [digestMatches] = await verifyRecord(tokenId, stage.recordHash);
+    if (!digestMatches) {
+      return res.status(409).json({ error: 'MintDigestMismatch', message: 'The chain does not bind this token to the staged ciphertext digest.' });
+    }
+
+    // The conditional claim makes a random upload ID a one-mint capability even
+    // when two API instances receive competing confirmations concurrently.
+    const claimed = await UploadStageModel.findOneAndUpdate(
+      { uploadId, status: 'staged' },
+      { $set: { status: 'confirmed', tokenId, mintedTx: txHash } },
+      { new: true }
+    );
+    if (!claimed) {
+      const current = await UploadStageModel.findOne({ uploadId }).lean();
+      if (
+        !current ||
+        current.status !== 'confirmed' ||
+        Number(current.tokenId) !== tokenId ||
+        String(current.mintedTx).toLowerCase() !== txHash
+      ) {
+        return res.status(409).json({ error: 'UploadAlreadyConfirmed', message: 'This upload is already bound to a different mint.' });
+      }
+    }
+
+    const mintedTx = txHash;
+    try {
+      await RecordModel.findOneAndUpdate(
+        { tokenId },
+        {
+          $set: {
+            tokenId,
+            patient: String(stage.patient).toLowerCase(),
+            recordType: stage.recordType,
+            recordHash: String(stage.recordHash).toLowerCase(),
+            plainHash: stage.plainHash || '',
+            cid: stage.cid || '',
+            sealedKey: stage.sealedKey || '(on disk)',
+            fileName: stage.fileName || 'record.bin',
+            mimeType: stage.mimeType || 'application/octet-stream',
+            sizeBytes: stage.sizeBytes || 0,
+            facility: stage.facility || '',
+            mintedAtBlock: Number(receipt.blockNumber),
+            mintedTx,
+            uploadId,
+            metadataConfirmed: true,
+            burned: false,
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+      );
+    } catch (error) {
+      if (error?.code === 11000) {
+        return res.status(409).json({ error: 'RecordCacheConflict', message: 'The verified mint conflicts with an existing record cache entry.' });
+      }
+      throw error;
+    }
+
+    return res.json({
+      ok: true,
+      uploadId,
+      tokenId,
+      recordHash: String(stage.recordHash).toLowerCase(),
+      mintedTx,
+      cachedInDatabase: true,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'UploadConfirmationFailed', message: error.message });
   }
 }
 
@@ -555,7 +776,12 @@ export async function releaseFile(req, res) {
     // download a scan under a name anyone would recognise.
     let fileMeta = null;
     if (isDbReady()) {
-      fileMeta = await RecordModel.findOne({ tokenId }).lean().catch(() => null);
+      fileMeta = await RecordModel.findOne({
+        tokenId,
+        recordHash: String(digest).toLowerCase(),
+        mintedTx: String(meta.mintedTx || '').toLowerCase(),
+        metadataConfirmed: true,
+      }).lean().catch(() => null);
     }
 
     return res.json({

@@ -29,6 +29,11 @@ export function newSignatureNonce() {
   return hexlify(randomBytes(32));
 }
 
+/** A unique, non-secret identifier for one staged upload. */
+export function newUploadId() {
+  return hexlify(randomBytes(32));
+}
+
 /** Hash the exact profile fields that an update will write, preserving omitted fields. */
 export function profilePayloadHash(fields = {}) {
   return payloadHash(
@@ -143,6 +148,7 @@ export function requestMessage(requestId, patient, recordType, timestamp, actor 
  */
 export function storePayloadHash({
   actor,
+  uploadId,
   tokenId,
   patient,
   recordHash,
@@ -155,7 +161,8 @@ export function storePayloadHash({
 }) {
   return payloadHash([
     getAddress(actor),
-    Number(tokenId),
+    String(uploadId).toLowerCase(),
+    tokenId == null || tokenId === '' ? '' : Number(tokenId),
     getAddress(patient),
     String(recordHash).toLowerCase(),
     String(recordType || 'UNSPECIFIED'),
@@ -167,13 +174,14 @@ export function storePayloadHash({
   ]);
 }
 
-export function storeMessage({ actor, tokenId, patient, recordHash, deadline, nonce, ...payload }, domain) {
-  const dataHash = storePayloadHash({ actor, tokenId, patient, recordHash, ...payload });
+export function storeMessage({ actor, uploadId, tokenId, patient, recordHash, deadline, nonce, ...payload }, domain) {
+  const dataHash = storePayloadHash({ actor, uploadId, tokenId, patient, recordHash, ...payload });
   return (
     'ApnaRecord store record\n' +
     signedWriteDomainLines(domain) +
     `actor: ${getAddress(actor)}\n` +
-    `tokenId: ${Number(tokenId)}\n` +
+    `uploadId: ${String(uploadId).toLowerCase()}\n` +
+    `tokenId: ${tokenId == null || tokenId === '' ? 'staged' : Number(tokenId)}\n` +
     `patient: ${getAddress(patient)}\n` +
     `recordHash: ${String(recordHash).toLowerCase()}\n` +
     `payloadHash: ${dataHash}\n` +

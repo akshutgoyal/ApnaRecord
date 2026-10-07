@@ -16,7 +16,7 @@
 
 import { createCipheriv } from 'node:crypto';
 import { ethers, Wallet } from 'ethers';
-import { newSignatureNonce, storeMessage } from '../../client/src/lib/wireMessages.js';
+import { newSignatureNonce, newUploadId, storeMessage } from '../../client/src/lib/wireMessages.js';
 import { check, group, report } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
@@ -55,7 +55,7 @@ function recordBody(overrides = {}) {
   const cipher = createCipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), iv);
   const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return {
-    tokenId: 1,
+    uploadId: newUploadId(),
     actor: '0x00000000000000000000000000000000000000A2',
     patient: '0x00000000000000000000000000000000000000A1',
     recordType: 'MRI_SCAN',
@@ -63,7 +63,7 @@ function recordBody(overrides = {}) {
     mimeType: 'application/octet-stream',
     contentKey,
     ciphertext: Buffer.concat([iv, encrypted, cipher.getAuthTag()]).toString('base64'),
-    cid: 'local://test',
+    cid: 'pending',
     plainHash: ethers.keccak256(plaintext),
     ...overrides,
   };
@@ -72,6 +72,7 @@ function recordBody(overrides = {}) {
 async function signedRecordBody(overrides, signer) {
   const body = recordBody({ ...overrides, actor: signer.address });
   const recordHash = ethers.keccak256(Buffer.from(body.ciphertext, 'base64'));
+  body.cid = `sha256:${recordHash.slice(2)}:upload:${body.uploadId.slice(2)}`;
   const deadline = Date.now() + 60_000;
   const nonce = newSignatureNonce();
   const signature = await signer.signMessage(
@@ -164,6 +165,15 @@ check(
   substitutedUpload.status === 403 && substitutedUpload.body.error === 'SignatureInvalid',
   `${substitutedUpload.status} ${substitutedUpload.body.error}`
 );
+const substitutedUploadId = await post('/records', {
+  ...strangerUpload,
+  uploadId: newUploadId(),
+});
+check(
+  'changing the staged upload ID after signing invalidates the signature',
+  substitutedUploadId.status === 403 && substitutedUploadId.body.error === 'SignatureInvalid',
+  `${substitutedUploadId.status} ${substitutedUploadId.body.error}`
+);
 const notMinting = await post('/records', strangerUpload);
 check(
   'a well-formed signature from an account with no minting role is refused',
@@ -223,6 +233,51 @@ check(
   API_2 ? uploadStatuses[0] === 201 && uploadStatuses[1] === 409 : uploadStatuses[0] === 201,
   uploadResponses.map((response) => `${response.status} ${response.body.error || ''}`).join(' | ')
 );
+check(
+  'the response leaves the upload staged without assigning a predicted token ID',
+  uploadResponses.some((response) => response.status === 201 && response.body.staged === true && !('tokenId' in response.body)),
+  uploadResponses.map((response) => JSON.stringify(response.body)).join(' | ')
+);
+const unconfirmedHash = ethers.keccak256(Buffer.from(authorizedUpload.ciphertext, 'base64'));
+const unconfirmedList = await (await fetch(`${API}/records`)).json();
+check(
+  'a staged upload is absent from the public record listing',
+  !(unconfirmedList.records || []).some((record) => record.recordHash === unconfirmedHash),
+  JSON.stringify(unconfirmedList.records || [])
+);
+const missingReceipt = await post('/records/confirm', {
+  uploadId: authorizedUpload.uploadId,
+  txHash: `0x${'99'.repeat(32)}`,
+});
+check(
+  'an upload cannot be promoted without a mined receipt',
+  missingReceipt.status === 409 && missingReceipt.body.error === 'MintNotConfirmed',
+  `${missingReceipt.status} ${missingReceipt.body.error || ''}`
+);
+const mockedMint = await fetch(CHAIN, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'mock_mintRecord',
+    params: [authorizedUpload.patient, unconfirmedHash, authorizedUpload.cid, authorizedUpload.actor],
+  }),
+}).then((response) => response.json());
+const confirmed = await post('/records/confirm', {
+  uploadId: authorizedUpload.uploadId,
+  txHash: mockedMint.result?.txHash,
+});
+check(
+  'the exact successful mint receipt promotes staged metadata under its actual token ID',
+  confirmed.status === 200 && confirmed.body.tokenId === mockedMint.result?.tokenId && confirmed.body.recordHash === unconfirmedHash,
+  `${confirmed.status} ${JSON.stringify(confirmed.body)}`
+);
+const confirmedAgain = await post('/records/confirm', {
+  uploadId: authorizedUpload.uploadId,
+  txHash: mockedMint.result?.txHash,
+});
+check('confirming the same receipt is idempotent', confirmedAgain.status === 200, `${confirmedAgain.status} ${confirmedAgain.body.error || ''}`);
 const uploadReplay = await post('/records', authorizedUpload);
 check('the same upload signature cannot be replayed', uploadReplay.status === 409, `${uploadReplay.status} ${uploadReplay.body.error || ''}`);
 await setMockRole(defaultAdminRole, uploader.address, false);
@@ -247,8 +302,8 @@ check('empty ciphertext is refused', emptyCipher.status === 400, `got ${emptyCip
 
 const wrongToken = await post('/records', await signedRecordBody({ tokenId: 99 }, stranger));
 check(
-  'a token that is not next in line is refused, so bytes cannot be parked against a future id',
-  wrongToken.status === 400 && wrongToken.body.error === 'NotNextToken',
+  'an explicit token ID that does not exist cannot be used as a staging shortcut',
+  wrongToken.status === 404 && wrongToken.body.error === 'RecordNotFound',
   `${wrongToken.status} ${wrongToken.body.error}`
 );
 

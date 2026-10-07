@@ -119,6 +119,8 @@ app.get('/', (req, res) => {
       permissions: '/api/chain/permissions/:address',
       events: '/api/chain/events',
       records: '/api/records',
+      stageRecord: 'POST /api/records (signed encrypted upload; remains private until mint confirmation)',
+      confirmRecord: 'POST /api/records/confirm { uploadId, txHash }',
       releaseFile: '/api/records/:tokenId/file?viewer=0x…  (consent-gated)',
       audit: '/api/audit/:tokenId',
       verify: 'POST /api/verify { tokenId, fileHash }',

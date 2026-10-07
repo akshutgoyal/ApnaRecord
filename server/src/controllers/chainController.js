@@ -142,7 +142,7 @@ export async function chainEvents(req, res) {
       if (isDbReady()) {
         try {
           const [recordRows, requestRows] = await Promise.all([
-            RecordModel.find().lean().catch(() => []),
+            RecordModel.find({ metadataConfirmed: true }).lean().catch(() => []),
             RequestModel.find().lean().catch(() => []),
           ]);
           tokenPatient = new Map(recordRows.map((r) => [String(r.tokenId), String(r.patient || '').toLowerCase()]));
@@ -390,7 +390,13 @@ export async function verify(req, res) {
     // exactly what the first test showed.
     const { RecordModel, isDbReady } = await import('../models/index.js');
     const row = isDbReady()
-      ? await RecordModel.findOne({ tokenId }).select('plainHash').lean()
+      ? await RecordModel.findOne({
+          tokenId,
+          recordHash: String(record.recordHash).toLowerCase(),
+          mintedTx: String(record.mintedTx || '').toLowerCase(),
+          patient: String(record.patient || '').toLowerCase(),
+          metadataConfirmed: true,
+        }).select('plainHash').lean()
       : null;
 
     const providedLower = String(provided).toLowerCase();
