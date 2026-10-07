@@ -18,6 +18,11 @@ import { EnrolmentModel, isDbReady } from '../models/index.js';
 import { ensureFunded, dripperStatus } from '../services/dripper.js';
 import { consumeGrant } from '../services/otp.js';
 import { noteHit } from '../lib/rateLimit.js';
+import {
+  claimOneUseNonce,
+  signedWriteDomain,
+  verifyDeadlineMessage,
+} from '../lib/signature.js';
 import { call, getAddress as contractAddress } from '../services/chain.js';
 import { deployAccount } from '../services/account.js';
 
@@ -86,11 +91,20 @@ export function dripMessage(address, timestamp) {
  * signature from it — an email grant would prove something else entirely, and would
  * let anyone who controls the mailbox rewrite the wrapping on a key they do not have.
  */
-export function rotateRecoveryMessage(address, timestamp) {
+export function recoveryPayloadHash({ sealed, salt, iterations }) {
+  const values = [String(sealed), String(salt), Number(iterations)];
+  return ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(values)));
+}
+
+export function rotateRecoveryMessage(address, dataHash, deadline, nonce, domain = signedWriteDomain()) {
   return (
     'ApnaRecord rotate recovery code\n' +
+    `chainId: ${domain.chainId}\n` +
+    `verifyingContract: ${domain.verifyingContract}\n` +
     `address: ${ethers.getAddress(address)}\n` +
-    `timestamp: ${timestamp}`
+    `payloadHash: ${String(dataHash).toLowerCase()}\n` +
+    `deadline: ${deadline}\n` +
+    `nonce: ${String(nonce).toLowerCase()}`
   );
 }
 
@@ -452,7 +466,7 @@ export async function getWallet(req, res) {
 
 /**
  * POST /api/wallet/:address/rotate-recovery
- * Body: { sealed, salt, iterations, timestamp, signature }
+ * Body: { sealed, salt, iterations, deadline, nonce, signature }
  *
  * Replaces the wrapping on an enrolment. The key does not change, the account does not
  * change, and nothing on chain moves — only the code that opens the local copy is
@@ -472,7 +486,7 @@ export async function rotateRecovery(req, res) {
   if (requireDb(res)) return;
 
   const { address } = req.params;
-  const { sealed, salt, iterations, timestamp, signature } = req.body || {};
+  const { sealed, salt, iterations, deadline, nonce, signature } = req.body || {};
 
   if (!ethers.isAddress(address)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
@@ -507,8 +521,29 @@ export async function rotateRecovery(req, res) {
     // The signature must come from the OWNER key, not from `address`. The account is a
     // contract and cannot sign at all, so requiring a signature that recovers to it
     // would not be stricter — it would make rotation impossible.
-    const problem = verify(rotateRecoveryMessage(address, timestamp), existing.owner, timestamp, signature);
-    if (problem) return res.status(403).json({ error: 'SignatureInvalid', message: problem });
+    const authorization = await verifyDeadlineMessage({
+      message: rotateRecoveryMessage(
+        address,
+        recoveryPayloadHash({ sealed, salt, iterations: rounds }),
+        deadline,
+        nonce
+      ),
+      address: existing.owner,
+      deadline,
+      nonce,
+      signature,
+    });
+    if (authorization.error) {
+      return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
+    }
+
+    const claim = await claimOneUseNonce({
+      bucket: 'signed-write',
+      address: existing.owner,
+      deadline,
+      nonce,
+    });
+    if (claim) return res.status(claim.status).json({ error: claim.code, message: claim.error });
 
     await EnrolmentModel.updateOne(
       { address: address.toLowerCase() },

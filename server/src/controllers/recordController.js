@@ -1,8 +1,13 @@
+import { createDecipheriv } from 'node:crypto';
 import { ethers } from 'ethers';
 import { RecordModel, isDbReady } from '../models/index.js';
 import { recordMeta, tokensOf, call, verifyRecord } from '../services/chain.js';
 import { entitledPatients } from '../middleware/requireWallet.js';
-import { verifyMessageForAddress } from '../lib/signature.js';
+import {
+  claimOneUseNonce,
+  signedWriteDomain,
+  verifyDeadlineMessage,
+} from '../lib/signature.js';
 import {
   putBlob,
   putSealedKey,
@@ -14,23 +19,74 @@ import {
 } from '../services/storage.js';
 
 const MAX_BYTES = 20 * 1024 * 1024; // 20 MB of ciphertext per request
+const GCM_IV_BYTES = 12;
+const GCM_TAG_BYTES = 16;
+
+/** Authenticate and hash the browser's AES-GCM payload with its submitted key. */
+function decryptPayloadHash(payload, contentKeyHex) {
+  if (payload.length < GCM_IV_BYTES + GCM_TAG_BYTES) return null;
+
+  try {
+    const iv = payload.subarray(0, GCM_IV_BYTES);
+    const encrypted = payload.subarray(GCM_IV_BYTES, payload.length - GCM_TAG_BYTES);
+    const tag = payload.subarray(payload.length - GCM_TAG_BYTES);
+    const decipher = createDecipheriv('aes-256-gcm', Buffer.from(contentKeyHex, 'hex'), iv);
+    decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return ethers.keccak256(plaintext);
+  } catch {
+    return null;
+  }
+}
 
 /**
- * The statement an uploader signs.
- *
- * Must stay byte-identical to `client/src/lib/wireMessages.js` `storeMessage`. The two
- * deploy separately so it is duplicated rather than imported, and the test suite
- * asserts they agree — drift here means every upload is refused and the failure looks
- * like a broken permissions system.
+ * Canonical hash and statement an uploader signs. These must stay byte-identical to
+ * `client/src/lib/wireMessages.js`; integration coverage compares both sides because
+ * drift makes every upload look like a broken permissions system.
  */
-export function storeMessage(tokenId, patient, recordHash, timestamp, actor = patient) {
+export function storePayloadHash({
+  actor,
+  tokenId,
+  patient,
+  recordHash,
+  recordType,
+  fileName,
+  mimeType,
+  contentKey,
+  cid,
+  plainHash,
+}) {
+  const values = [
+    ethers.getAddress(actor),
+    Number(tokenId),
+    ethers.getAddress(patient),
+    String(recordHash).toLowerCase(),
+    String(recordType || 'UNSPECIFIED'),
+    String(fileName || 'record.bin'),
+    String(mimeType || 'application/octet-stream'),
+    String(contentKey).toLowerCase(),
+    String(cid || ''),
+    String(plainHash || '').toLowerCase(),
+  ];
+  return ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(values)));
+}
+
+export function storeMessage(
+  { actor, tokenId, patient, recordHash, deadline, nonce, ...payload },
+  domain = signedWriteDomain()
+) {
+  const dataHash = storePayloadHash({ actor, tokenId, patient, recordHash, ...payload });
   return (
     'ApnaRecord store record\n' +
+    `chainId: ${domain.chainId}\n` +
+    `verifyingContract: ${domain.verifyingContract}\n` +
     `actor: ${ethers.getAddress(actor)}\n` +
     `tokenId: ${Number(tokenId)}\n` +
     `patient: ${ethers.getAddress(patient)}\n` +
     `recordHash: ${String(recordHash).toLowerCase()}\n` +
-    `timestamp: ${timestamp}`
+    `payloadHash: ${dataHash}\n` +
+    `deadline: ${deadline}\n` +
+    `nonce: ${String(nonce).toLowerCase()}`
   );
 }
 
@@ -218,7 +274,7 @@ export async function listByOwner(req, res) {
  * Store a record the BROWSER already encrypted. The server receives ciphertext,
  * seals the content key, and never sees the plaintext at rest.
  *
- * Body: { actor, tokenId, patient, recordType, fileName, mimeType, contentKey, ciphertext }
+ * Body: { actor, tokenId, patient, recordType, fileName, mimeType, contentKey, ciphertext, deadline, nonce, signature }
  *       contentKey  — hex, 32 bytes, generated in the browser
  *       ciphertext  — base64 of `iv || ciphertext || tag`
  */
@@ -235,7 +291,8 @@ export async function storeRecord(req, res) {
       ciphertext,
       cid,
       plainHash,
-      timestamp,
+      deadline,
+      nonce,
       signature,
     } = req.body || {};
 
@@ -261,8 +318,22 @@ export async function storeRecord(req, res) {
     if (!ethers.isAddress(patient)) {
       return res.status(400).json({ error: 'BadRequest', message: 'patient must be a wallet address.' });
     }
-    if (!timestamp || !signature) {
+    if (!deadline || !nonce || !signature) {
       return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement from the acting account is required.' });
+    }
+
+    for (const [field, value, maxLength] of [
+      ['recordType', recordType, 60],
+      ['fileName', fileName, 255],
+      ['mimeType', mimeType, 128],
+      ['cid', cid, 256],
+    ]) {
+      if (value != null && typeof value !== 'string') {
+        return res.status(400).json({ error: 'BadRequest', message: `${field} must be text.` });
+      }
+      if (typeof value === 'string' && value.length > maxLength) {
+        return res.status(400).json({ error: 'BadRequest', message: `${field} must be at most ${maxLength} characters.` });
+      }
     }
 
     const payload = Buffer.from(ciphertext, 'base64');
@@ -278,6 +349,18 @@ export async function storeRecord(req, res) {
 
     // The digest the browser put on-chain must be keccak256 of these exact bytes.
     const digest = ethers.keccak256(payload);
+    const signedPayload = {
+      actor: ethers.getAddress(actor),
+      tokenId: Number(tokenId),
+      patient: ethers.getAddress(patient),
+      recordHash: digest,
+      recordType: recordType || 'UNSPECIFIED',
+      fileName: fileName || 'record.bin',
+      mimeType: mimeType || 'application/octet-stream',
+      contentKey: contentKey.toLowerCase(),
+      cid: cid || '',
+      plainHash: String(plainHash || '').toLowerCase(),
+    };
 
     // ---------------------------------------------------------------------
     // WHO IS ASKING, AND WHETHER THE CHAIN AGREES.
@@ -305,11 +388,12 @@ export async function storeRecord(req, res) {
       onChainOwner = null;
     }
 
-    const statement = storeMessage(Number(tokenId), patient, digest, timestamp, actor);
-    const authorization = await verifyMessageForAddress({
+    const statement = storeMessage({ ...signedPayload, deadline, nonce });
+    const authorization = await verifyDeadlineMessage({
       message: statement,
       address: actor,
-      timestamp,
+      deadline,
+      nonce,
       signature,
     });
     if (authorization.error) {
@@ -382,22 +466,39 @@ export async function storeRecord(req, res) {
       }
     }
 
+    const plainDigest = decryptPayloadHash(payload, signedPayload.contentKey);
+    if (!plainDigest) {
+      return res.status(400).json({
+        error: 'ContentKeyMismatch',
+        message: 'The content key does not authenticate this AES-GCM ciphertext.',
+      });
+    }
+    if (signedPayload.plainHash && plainDigest.toLowerCase() !== signedPayload.plainHash) {
+      return res.status(400).json({
+        error: 'PlainHashMismatch',
+        message: 'plainHash does not match the plaintext authenticated by this content key.',
+      });
+    }
+
+    const claim = await claimOneUseNonce({ bucket: 'signed-write', address: actor, deadline, nonce });
+    if (claim) return res.status(claim.status).json({ error: claim.code, message: claim.error });
+
     const { stored } = await putBlob(digest, payload);
-    await putSealedKey(digest, sealKey(contentKey));
+    await putSealedKey(digest, sealKey(signedPayload.contentKey));
 
     if (isDbReady()) {
       await RecordModel.findOneAndUpdate(
         { tokenId: Number(tokenId) },
         {
           tokenId: Number(tokenId),
-          patient: ethers.getAddress(patient).toLowerCase(),
-          recordType: recordType || 'UNSPECIFIED',
+          patient: signedPayload.patient.toLowerCase(),
+          recordType: signedPayload.recordType,
           recordHash: digest,
-          plainHash: String(plainHash || '').toLowerCase(),
-          cid: cid || '',
+          plainHash: signedPayload.plainHash,
+          cid: signedPayload.cid,
           sealedKey: '(on disk)',
-          fileName: fileName || 'record.bin',
-          mimeType: mimeType || 'application/octet-stream',
+          fileName: signedPayload.fileName,
+          mimeType: signedPayload.mimeType,
           sizeBytes: payload.length,
           facility: minterFacility || '',
         },
@@ -417,6 +518,9 @@ export async function storeRecord(req, res) {
         'a minting account signed, with the bytes hashing to the on-chain digest.',
     });
   } catch (error) {
+    if (error?.code === 'CONTENT_KEY_CONFLICT') {
+      return res.status(409).json({ error: 'ContentKeyConflict', message: error.message });
+    }
     return res.status(500).json({ error: 'StorageFailed', message: error.message });
   }
 }

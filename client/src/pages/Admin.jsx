@@ -2,9 +2,15 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { isAddress, ZeroAddress } from 'ethers';
 import { useChain, describeError, contractError } from '../chain';
+import { CHAIN_ID, CONTRACT_ADDRESS } from '../contract';
 import { encryptRecord, digestOf, formatBytes, toBase64 } from '../crypto';
 import { chainIdentities, storeRecord, recordIdentity, recordFacility, pendingRegistrations } from '../services/api';
-import { storeMessage, identityMessage, facilityMessage } from '../lib/wireMessages';
+import {
+  facilityMessage,
+  identityMessage,
+  newSignatureNonce,
+  storeMessage,
+} from '../lib/wireMessages';
 import { DEMO_ACCOUNTS } from '../config/demoAccounts';
 import { useTx } from '../hooks/useTx';
 import { useToast } from '../components/Toast';
@@ -425,21 +431,29 @@ export default function Admin() {
         // useless to someone holding the scan, and encryption takes a fresh IV so they can
         // never reproduce it. Their own file used to answer "Tampered".
         const plainHash = digestOf(buffer);
-        const timestamp = Date.now();
-        const signature = await signMessage(storeMessage(tokenId, mint.patient, digest, timestamp, account));
-
-        await storeRecord({
+        const deadline = Date.now() + 5 * 60 * 1000;
+        const nonce = newSignatureNonce();
+        const upload = {
           actor: account,
           tokenId,
           patient: mint.patient,
+          recordHash: digest,
           recordType: mint.recordType,
           fileName: mint.file.name,
           mimeType: mint.file.type || 'application/octet-stream',
           contentKey,
-          ciphertext: toBase64(payload),
           cid,
           plainHash,
-          timestamp,
+          deadline,
+          nonce,
+        };
+        const signature = await signMessage(
+          storeMessage(upload, { chainId: CHAIN_ID, verifyingContract: CONTRACT_ADDRESS })
+        );
+
+        await storeRecord({
+          ...upload,
+          ciphertext: toBase64(payload),
           signature,
         });
 

@@ -332,11 +332,12 @@ export const saveProfile = (address, body) =>
 // The signature travels in headers, not the query string. A bearer credential in a
 // URL is copied into access logs, browser history and `Referer` headers — places it
 // has no business being.
-export const eraseProfile = (address, timestamp, signature) =>
+export const eraseProfile = (address, deadline, nonce, signature) =>
   request(`/profiles/${address}`, {
     method: 'DELETE',
     headers: {
-      'x-apnarecord-timestamp': String(timestamp),
+      'x-apnarecord-deadline': String(deadline),
+      'x-apnarecord-nonce': nonce,
       'x-apnarecord-signature': signature,
     },
   });

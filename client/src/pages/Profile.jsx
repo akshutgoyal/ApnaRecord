@@ -1,18 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getAddress } from 'ethers';
 import { useChain, describeError } from '../chain';
+import { CHAIN_ID, CONTRACT_ADDRESS } from '../contract';
 import { getProfile, saveProfile, eraseProfile } from '../services/api';
 import { Card, Callout, Field, Pill, Busy } from '../components/ui';
 import { OffChainBadge } from '../components/viz/primitives';
-
-/**
- * The exact statement the server expects, built identically on both sides.
- * Must stay byte-for-byte in step with profileMessage() in the backend.
- */
-function profileMessage(address, timestamp) {
-  return 'ApnaRecord profile update\n' + `address: ${getAddress(address)}\n` + `timestamp: ${timestamp}`;
-}
+import { newSignatureNonce, profileMessage, profilePayloadHash } from '../lib/wireMessages';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
@@ -63,10 +56,16 @@ export default function Profile() {
     };
   }, [account]);
 
-  const buildSignature = async () => {
-    const timestamp = Date.now();
-    const signature = await signMessage(profileMessage(account, timestamp));
-    return { timestamp, signature };
+  const buildSignature = async (operation, fields = {}) => {
+    const deadline = Date.now() + 5 * 60 * 1000;
+    const nonce = newSignatureNonce();
+    const signature = await signMessage(
+      profileMessage(account, operation, profilePayloadHash(fields), deadline, nonce, {
+        chainId: CHAIN_ID,
+        verifyingContract: CONTRACT_ADDRESS,
+      })
+    );
+    return { deadline, nonce, signature };
   };
 
   const save = async () => {
@@ -74,8 +73,8 @@ export default function Profile() {
     setError(null);
     setMessage(null);
     try {
-      const { timestamp, signature } = await buildSignature();
-      const result = await saveProfile(account, { ...form, timestamp, signature });
+      const { deadline, nonce, signature } = await buildSignature('update', form);
+      const result = await saveProfile(account, { ...form, deadline, nonce, signature });
       setSaved(result.profile);
       setMessage({
         tone: 'ok',
@@ -95,8 +94,8 @@ export default function Profile() {
     setError(null);
     setMessage(null);
     try {
-      const { timestamp, signature } = await buildSignature();
-      await eraseProfile(account, timestamp, signature);
+      const { deadline, nonce, signature } = await buildSignature('delete');
+      await eraseProfile(account, deadline, nonce, signature);
       setSaved(null);
       setForm(EMPTY);
       setMessage({
@@ -175,6 +174,7 @@ export default function Profile() {
           <Field label="Full name">
             <input
               className="input"
+              maxLength={300}
               value={form.displayName}
               onChange={(event) => setForm((c) => ({ ...c, displayName: event.target.value }))}
               placeholder="e.g., Priya Sharma"
@@ -213,6 +213,7 @@ export default function Profile() {
           <Field label="Emergency contact" hint="Name and number, as you would want it read aloud.">
             <input
               className="input"
+              maxLength={300}
               value={form.emergencyContact}
               onChange={(event) => setForm((c) => ({ ...c, emergencyContact: event.target.value }))}
               placeholder="e.g., Anil Sharma · +91 98••• •••••"
@@ -223,6 +224,7 @@ export default function Profile() {
             <Field label="Allergies" hint="Free text. This never leaves our database.">
               <textarea
                 className="input min-h-[80px]"
+                maxLength={300}
                 value={form.allergies}
                 onChange={(event) => setForm((c) => ({ ...c, allergies: event.target.value }))}
                 placeholder="e.g., Penicillin, latex"
@@ -268,21 +270,22 @@ export default function Profile() {
       <Card title="What your signature actually authorises" subtitle="Worth knowing before you sign">
         <ul className="space-y-2.5 text-xs leading-relaxed text-slate-600">
           <li>
-            MetaMask shows you this exact text before signing:
+            Your wallet shows a statement bound to the exact fields above:
             <pre className="mono mt-1.5 overflow-x-auto rounded border border-line bg-slate-50 p-2.5 text-[10px] text-slate-700">
 {`ApnaRecord profile update
+chainId: ${CHAIN_ID}
+verifyingContract: ${CONTRACT_ADDRESS}
 address: ${account}
-timestamp: <now>`}
+payloadHash: ${profilePayloadHash(form)}
+deadline: <five minutes from now>
+nonce: <one-use random value>`}
             </pre>
           </li>
           <li>
             It is <strong className="text-ink">not a transaction</strong>. It costs no gas, changes
             nothing on-chain, and cannot move a record.
           </li>
-          <li>
-            The timestamp keeps it fresh — the server rejects a signature older than five minutes, so
-            a captured signature cannot be replayed later.
-          </li>
+          <li>The deadline expires after five minutes, and the random nonce makes the signature usable once.</li>
         </ul>
       </Card>
     </div>

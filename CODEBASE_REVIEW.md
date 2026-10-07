@@ -53,7 +53,9 @@ Enrolment and top-ups fund the account contract. The client then constructs a co
 
 ### 3. High — signatures do not authenticate several mutable write payloads
 
-References: `server/src/controllers/profileController.js:18`, `:118`, `:169`; `server/src/controllers/walletController.js:89`, `:505`; `server/src/controllers/recordController.js:26`, `:371`.
+**Status: repaired locally; regression coverage added.** Profile update and deletion now use distinct signed operations and hashes of the exact fields written. Recovery rotation binds the sealed blob, salt, and KDF rounds. Record uploads bind every persisted metadata field and the content key. All three use a five-minute deadline and a shared, database-backed one-use nonce claim that fails closed when the database is unavailable. Uploads also verify the AES-GCM tag and any plaintext digest against the submitted key, and sealed keys cannot be replaced by a different key for existing ciphertext.
+
+References: the profile handlers in `server/src/controllers/profileController.js`, recovery rotation in `server/src/controllers/walletController.js`, upload storage in `server/src/controllers/recordController.js`, and shared replay checks in `server/src/lib/signature.js`.
 
 The profile signature covers only address and timestamp. A captured valid request signature can authorize different allergies, blood group, date of birth, and emergency contacts during the freshness window. DELETE accepts the same “profile update” signature, so it can also erase the profile. The handlers have no one-use replay claim.
 
@@ -61,7 +63,7 @@ Recovery rotation signs only account address and timestamp, excluding the replac
 
 **Evidence, reproduced against the real profile handlers and an isolated MongoDB:** One signature successfully stored two different allergy values, then successfully deleted the profile.
 
-**Repair:** Sign operation-specific typed messages with chain/deployment domain, canonical payload digest, nonce, and deadline. Include all mutable security-relevant values, and atomically consume the nonce. Use a distinct delete operation. Validate the content key against the encrypted payload before storing it, and control replacement of an existing wrapped key.
+**Repair applied:** Operation-specific personal-message statements include the configured chain id and contract address, canonical payload digests, nonce, and deadline. Nonces are atomically claimed across API instances. Delete has its own operation. The content key and optional plaintext digest are checked against the AES-GCM payload, and storage refuses a conflicting replacement.
 
 ### 4. High — OTP and contact grants are not single-use under concurrency
 

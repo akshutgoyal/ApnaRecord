@@ -12,14 +12,21 @@
 // returning a normal response with no error.
 //
 // The stub chain answers the contract reads this needs: `ownerOf` reverts (so a token
-// is treated as not yet minted), `nextTokenId` returns 1, `hasRole` returns false.
+// is treated as not yet minted), `nextTokenId` returns 1, and tests toggle roles as needed.
 
+import { createCipheriv } from 'node:crypto';
 import { ethers, Wallet } from 'ethers';
-import { storeMessage } from '../../client/src/lib/wireMessages.js';
+import { newSignatureNonce, storeMessage } from '../../client/src/lib/wireMessages.js';
 import { check, group, report } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
+const API_2 = process.env.API_URL_2;
 const ALLOWED_ORIGIN = 'http://localhost:5173';
+const WRITE_DOMAIN = {
+  chainId: Number(process.env.CHAIN_ID || 84532),
+  verifyingContract:
+    process.env.CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000abc',
+};
 
 async function post(path, body, headers = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -30,8 +37,23 @@ async function post(path, body, headers = {}) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
+async function postTo(base, path, body) {
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+  return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
 /** A body that passes every shape check, so only the auth is under test. */
 function recordBody(overrides = {}) {
+  const contentKey = overrides.contentKey || 'ab'.repeat(32);
+  const encryptionKey = /^[0-9a-fA-F]{64}$/.test(contentKey) ? contentKey : 'ab'.repeat(32);
+  const plaintext = Buffer.from('not really a scan');
+  const iv = Buffer.alloc(12, 0x42);
+  const cipher = createCipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return {
     tokenId: 1,
     actor: '0x00000000000000000000000000000000000000A2',
@@ -39,11 +61,37 @@ function recordBody(overrides = {}) {
     recordType: 'MRI_SCAN',
     fileName: 'scan.bin',
     mimeType: 'application/octet-stream',
-    contentKey: 'ab'.repeat(32),
-    ciphertext: Buffer.from('not really a scan').toString('base64'),
+    contentKey,
+    ciphertext: Buffer.concat([iv, encrypted, cipher.getAuthTag()]).toString('base64'),
     cid: 'local://test',
+    plainHash: ethers.keccak256(plaintext),
     ...overrides,
   };
+}
+
+async function signedRecordBody(overrides, signer) {
+  const body = recordBody({ ...overrides, actor: signer.address });
+  const recordHash = ethers.keccak256(Buffer.from(body.ciphertext, 'base64'));
+  const deadline = Date.now() + 60_000;
+  const nonce = newSignatureNonce();
+  const signature = await signer.signMessage(
+    storeMessage({ ...body, recordHash, deadline, nonce }, WRITE_DOMAIN)
+  );
+  return { ...body, deadline, nonce, signature };
+}
+
+async function setMockRole(role, address, held) {
+  const response = await fetch(process.env.CHAIN || 'http://127.0.0.1:8545', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'mock_setRole',
+      params: [role, address, held],
+    }),
+  });
+  return response.ok;
 }
 
 group('CORS is an allowlist, not a formality');
@@ -69,6 +117,24 @@ check(
   String(allowed.headers.get('access-control-allow-origin'))
 );
 
+const signedDeletePreflight = await fetch(`${API}/profiles/${Wallet.createRandom().address}`, {
+  method: 'OPTIONS',
+  headers: {
+    Origin: ALLOWED_ORIGIN,
+    'Access-Control-Request-Method': 'DELETE',
+    'Access-Control-Request-Headers':
+      'x-apnarecord-deadline,x-apnarecord-nonce,x-apnarecord-signature',
+  },
+});
+const allowedHeaders = signedDeletePreflight.headers.get('access-control-allow-headers') || '';
+check(
+  'browser preflight permits deadline and nonce headers for signed deletion',
+  signedDeletePreflight.status === 204 &&
+    /x-apnarecord-deadline/i.test(allowedHeaders) &&
+    /x-apnarecord-nonce/i.test(allowedHeaders),
+  `${signedDeletePreflight.status} ${allowedHeaders}`
+);
+
 const noOrigin = await fetch(`${API}/health`);
 check(
   'a request with no Origin at all still works — CORS is a browser control',
@@ -80,8 +146,8 @@ group('POST /records refuses what it cannot prove');
 
 const unsigned = await post('/records', recordBody());
 check(
-  'an unsigned upload is refused',
-  unsigned.status === 403,
+  'an upload with no signed deadline, nonce or signature is refused',
+  unsigned.status === 400,
   `got ${unsigned.status} ${JSON.stringify(unsigned.body).slice(0, 120)}`
 );
 check(
@@ -91,17 +157,14 @@ check(
 );
 
 const stranger = Wallet.createRandom();
-const strangerTime = Date.now();
-const strangerDigest = ethers.keccak256(
-  Buffer.from(recordBody().ciphertext, 'base64')
+const strangerUpload = await signedRecordBody({}, stranger);
+const substitutedUpload = await post('/records', { ...strangerUpload, fileName: 'changed-after-signing.bin' });
+check(
+  'changing upload metadata after signing invalidates the signature',
+  substitutedUpload.status === 403 && substitutedUpload.body.error === 'SignatureInvalid',
+  `${substitutedUpload.status} ${substitutedUpload.body.error}`
 );
-const strangerSignature = await stranger.signMessage(
-  storeMessage(1, recordBody().patient, strangerDigest, strangerTime, stranger.address)
-);
-const notMinting = await post(
-  '/records',
-  recordBody({ actor: stranger.address, timestamp: strangerTime, signature: strangerSignature })
-);
+const notMinting = await post('/records', strangerUpload);
 check(
   'a well-formed signature from an account with no minting role is refused',
   notMinting.status === 403 && notMinting.body.error === 'NotMintingRole',
@@ -112,6 +175,57 @@ check(
   /platform|hospital/i.test(notMinting.body.message || ''),
   notMinting.body.message
 );
+
+const uploader = Wallet.createRandom();
+const defaultAdminRole = `0x${'00'.repeat(32)}`;
+check('the mock chain grants a temporary upload role', await setMockRole(defaultAdminRole, uploader.address, true));
+const authorizedUpload = await signedRecordBody({}, uploader);
+const contentKeySubstitution = await post('/records', {
+  ...authorizedUpload,
+  contentKey: 'cd'.repeat(32),
+});
+check(
+  'changing the content key after signing invalidates the upload signature',
+  contentKeySubstitution.status === 403 && contentKeySubstitution.body.error === 'SignatureInvalid',
+  `${contentKeySubstitution.status} ${contentKeySubstitution.body.error || ''}`
+);
+
+const incorrectlyPairedKey = await signedRecordBody(
+  { contentKey: 'cd'.repeat(32), ciphertext: recordBody().ciphertext },
+  uploader
+);
+const keyMismatch = await post('/records', incorrectlyPairedKey);
+check(
+  'a signed key that cannot authenticate the ciphertext is refused',
+  keyMismatch.status === 400 && keyMismatch.body.error === 'ContentKeyMismatch',
+  `${keyMismatch.status} ${keyMismatch.body.error || ''}`
+);
+
+const incorrectPlainHash = await post(
+  '/records',
+  await signedRecordBody({ plainHash: `0x${'ef'.repeat(32)}` }, uploader)
+);
+check(
+  'a signed plaintext digest that disagrees with authenticated bytes is refused',
+  incorrectPlainHash.status === 400 && incorrectPlainHash.body.error === 'PlainHashMismatch',
+  `${incorrectPlainHash.status} ${incorrectPlainHash.body.error || ''}`
+);
+
+const uploadResponses = API_2
+  ? await Promise.all([
+      post('/records', authorizedUpload),
+      postTo(API_2, '/records', authorizedUpload),
+    ])
+  : [await post('/records', authorizedUpload)];
+const uploadStatuses = uploadResponses.map((response) => response.status).sort((a, b) => a - b);
+check(
+  API_2 ? 'only one server can claim a concurrent upload signature' : 'an authorized upload is stored',
+  API_2 ? uploadStatuses[0] === 201 && uploadStatuses[1] === 409 : uploadStatuses[0] === 201,
+  uploadResponses.map((response) => `${response.status} ${response.body.error || ''}`).join(' | ')
+);
+const uploadReplay = await post('/records', authorizedUpload);
+check('the same upload signature cannot be replayed', uploadReplay.status === 409, `${uploadReplay.status} ${uploadReplay.body.error || ''}`);
+await setMockRole(defaultAdminRole, uploader.address, false);
 
 group('POST /records refuses the shapes it used to accept');
 
@@ -131,10 +245,7 @@ check('a malformed content key is refused', badKey.status === 400, `got ${badKey
 const emptyCipher = await post('/records', recordBody({ ciphertext: '' }));
 check('empty ciphertext is refused', emptyCipher.status === 400, `got ${emptyCipher.status}`);
 
-const wrongToken = await post(
-  '/records',
-  recordBody({ tokenId: 99, timestamp: Date.now(), signature: strangerSignature })
-);
+const wrongToken = await post('/records', await signedRecordBody({ tokenId: 99 }, stranger));
 check(
   'a token that is not next in line is refused, so bytes cannot be parked against a future id',
   wrongToken.status === 400 && wrongToken.body.error === 'NotNextToken',
@@ -170,7 +281,11 @@ check(
 
 const eraseViaHeader = await fetch(`${API}/profiles/${stranger.address}`, {
   method: 'DELETE',
-  headers: { 'x-apnarecord-timestamp': String(Date.now()), 'x-apnarecord-signature': '0xdead' },
+  headers: {
+    'x-apnarecord-deadline': String(Date.now() + 60_000),
+    'x-apnarecord-nonce': newSignatureNonce(),
+    'x-apnarecord-signature': '0xdead',
+  },
 });
 check(
   'and the header form is what the server actually reads',

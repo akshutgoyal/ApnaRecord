@@ -11,20 +11,48 @@ import {
   generateRecoveryCode,
   openPrivateKey,
 } from '../../client/src/lib/keystore.js';
-import { enrolMessage, requestMessage, rotateRecoveryMessage } from '../../client/src/lib/wireMessages.js';
-import { storeMessage } from '../../client/src/lib/wireMessages.js';
+import {
+  enrolMessage,
+  newSignatureNonce,
+  profileMessage as clientProfileMessage,
+  profilePayloadHash,
+  recoveryPayloadHash,
+  requestMessage,
+  rotateRecoveryMessage as clientRotateRecoveryMessage,
+  storeMessage as clientStoreMessage,
+  storePayloadHash,
+} from '../../client/src/lib/wireMessages.js';
 import {
   enrolMessage as serverEnrolMessage,
+  recoveryPayloadHash as serverRecoveryPayloadHash,
   rotateRecoveryMessage as serverRotateMessage,
 } from '../../server/src/controllers/walletController.js';
-import { storeMessage as serverStoreMessage } from '../../server/src/controllers/recordController.js';
-import { profileMessage as serverProfileMessage } from '../../server/src/controllers/profileController.js';
+import {
+  storeMessage as serverStoreMessage,
+  storePayloadHash as serverStorePayloadHash,
+} from '../../server/src/controllers/recordController.js';
+import {
+  profileMessage as serverProfileMessage,
+  profilePayloadHash as serverProfilePayloadHash,
+} from '../../server/src/controllers/profileController.js';
 import { READ_DOMAIN, READ_TYPES } from '../../server/src/lib/readProof.js';
 import { check, group, report, proofHeaders } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
 const MOCK_LOG = process.env.MOCK_LOG || '/tmp/mock-chain.log';
 const CHAIN = process.env.CHAIN || 'http://127.0.0.1:8545';
+const WRITE_DOMAIN = {
+  chainId: Number(process.env.CHAIN_ID || 84532),
+  verifyingContract:
+    process.env.CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000abc',
+};
+const profileWriteMessage = (...args) => clientProfileMessage(...args, WRITE_DOMAIN);
+const recoveryWriteMessage = (...args) => clientRotateRecoveryMessage(...args, WRITE_DOMAIN);
+const storeWriteMessage = (payload) => clientStoreMessage(payload, WRITE_DOMAIN);
+const otherDeployment = {
+  chainId: WRITE_DOMAIN.chainId + 1,
+  verifyingContract: '0x0000000000000000000000000000000000000002',
+};
 
 
 async function post(path, body) {
@@ -141,23 +169,70 @@ check(
 // The store statement is the one that authenticates an upload, so drift here means
 // every record upload is refused — and the failure presents as a permissions bug.
 const probeDigest = `0x${'ab'.repeat(32)}`;
+const probeNonce = `0x${'11'.repeat(32)}`;
+const probeDeadline = 1234567890;
+const probeUpload = {
+  actor: probe,
+  tokenId: 7,
+  patient: probe,
+  recordHash: probeDigest,
+  recordType: 'MRI_SCAN',
+  fileName: 'scan.pdf',
+  mimeType: 'application/pdf',
+  contentKey: 'ab'.repeat(32),
+  cid: 'sha256:abc123',
+  plainHash: `0x${'cd'.repeat(32)}`,
+};
 check(
   'the client and server agree on the store message byte for byte',
-  storeMessage(7, probe, probeDigest, 1234567890, probe) === serverStoreMessage(7, probe, probeDigest, 1234567890, probe),
-  storeMessage(7, probe, probeDigest, 1234567890, probe)
+  storeWriteMessage({ ...probeUpload, deadline: probeDeadline, nonce: probeNonce }) ===
+    serverStoreMessage({ ...probeUpload, deadline: probeDeadline, nonce: probeNonce }),
+  storeWriteMessage({ ...probeUpload, deadline: probeDeadline, nonce: probeNonce })
 );
 check(
-  'the store message lowercases the digest, so a checksum case cannot break it',
-  storeMessage(7, probe, `0x${'AB'.repeat(32)}`, 1, probe) ===
-    storeMessage(7, probe, `0x${'ab'.repeat(32)}`, 1, probe)
+  'the client and server agree on the complete upload payload hash',
+  storePayloadHash(probeUpload) === serverStorePayloadHash(probeUpload),
+  storePayloadHash(probeUpload)
 );
 check(
-  'the store message binds actor, token id, patient and digest',
-  storeMessage(7, probe, probeDigest, 1, probe) !== storeMessage(7, probe, probeDigest, 1, '0x0000000000000000000000000000000000000002') &&
-    storeMessage(7, probe, probeDigest, 1, probe) !== storeMessage(8, probe, probeDigest, 1, probe) &&
-    storeMessage(7, probe, probeDigest, 1) !==
-      storeMessage(7, '0x0000000000000000000000000000000000000002', probeDigest, 1) &&
-    storeMessage(7, probe, probeDigest, 1) !== storeMessage(7, probe, `0x${'cd'.repeat(32)}`, 1)
+  'the upload signature binds every stored metadata and key field',
+  ['actor', 'tokenId', 'patient', 'recordHash', 'recordType', 'fileName', 'mimeType', 'contentKey', 'cid', 'plainHash'].every(
+    (key) => {
+      const replacement =
+        key === 'actor' || key === 'patient'
+          ? '0x0000000000000000000000000000000000000002'
+          : key === 'tokenId'
+            ? 8
+            : key === 'recordHash' || key === 'plainHash'
+              ? `0x${'ef'.repeat(32)}`
+              : `${probeUpload[key]}-changed`;
+      const changed = { ...probeUpload, [key]: replacement };
+      return storeWriteMessage({ ...probeUpload, deadline: probeDeadline, nonce: probeNonce }) !==
+        storeWriteMessage({ ...changed, deadline: probeDeadline, nonce: probeNonce });
+    }
+  ) &&
+    clientStoreMessage(
+      { ...probeUpload, deadline: probeDeadline, nonce: probeNonce },
+      otherDeployment
+    ) !== storeWriteMessage({ ...probeUpload, deadline: probeDeadline, nonce: probeNonce })
+);
+
+const profileFields = { displayName: 'Alice', allergies: '' };
+const profileHash = profilePayloadHash(profileFields);
+check(
+  'the client and server agree on the profile payload hash and message',
+  profileHash === serverProfilePayloadHash(profileFields) &&
+    profileWriteMessage(probe, 'update', profileHash, probeDeadline, probeNonce) ===
+      serverProfileMessage(probe, 'update', profileHash, probeDeadline, probeNonce)
+);
+check(
+  'profile signatures bind the deployment, operation, field values and field presence',
+  profileWriteMessage(probe, 'update', profileHash, probeDeadline, probeNonce) !==
+    profileWriteMessage(probe, 'delete', serverProfilePayloadHash({}), probeDeadline, probeNonce) &&
+    clientProfileMessage(probe, 'update', profileHash, probeDeadline, probeNonce, otherDeployment) !==
+      profileWriteMessage(probe, 'update', profileHash, probeDeadline, probeNonce) &&
+    profileHash !== profilePayloadHash({ displayName: 'Mallory', allergies: '' }) &&
+    profileHash !== profilePayloadHash({ displayName: 'Alice' })
 );
 
 group('enrolment');
@@ -212,19 +287,57 @@ check(
   `${session.status} ${session.body.viewer || session.body.error}`
 );
 
-const profileTimestamp = Date.now();
+const profileFieldsToSave = { displayName: 'Account Owner' };
+const profileDeadline = Date.now() + 60_000;
+const profileNonce = newSignatureNonce();
+const profileHashForSave = profilePayloadHash(profileFieldsToSave);
 const profileSignature = await profileOwner.signMessage(
-  serverProfileMessage(profileAccount, profileTimestamp)
+  profileWriteMessage(profileAccount, 'update', profileHashForSave, profileDeadline, profileNonce)
 );
+const substitutedProfile = await post(`/profiles/${profileAccount}`, {
+  displayName: 'Changed after signing',
+  deadline: profileDeadline,
+  nonce: profileNonce,
+  signature: profileSignature,
+});
+check(
+  'a profile field changed after signing is refused',
+  substitutedProfile.status === 403 && substitutedProfile.body.error === 'SignatureInvalid',
+  `${substitutedProfile.status} ${substitutedProfile.body.error || ''}`
+);
+
+const deleteWithUpdateSignature = await fetch(`${API}/profiles/${profileAccount}`, {
+  method: 'DELETE',
+  headers: {
+    'x-apnarecord-deadline': String(profileDeadline),
+    'x-apnarecord-nonce': profileNonce,
+    'x-apnarecord-signature': profileSignature,
+  },
+});
+check('an update signature cannot be reused to delete a profile', deleteWithUpdateSignature.status === 403);
+
 const profileSave = await post(`/profiles/${profileAccount}`, {
-  displayName: 'Account Owner',
-  timestamp: profileTimestamp,
+  ...profileFieldsToSave,
+  deadline: profileDeadline,
+  nonce: profileNonce,
   signature: profileSignature,
 });
 check(
   'an EIP-1271 account signature authorizes its profile write',
   profileSave.status === 200 && profileSave.body.profile?.displayName === 'Account Owner',
   `${profileSave.status} ${profileSave.body.error || ''}`
+);
+
+const profileReplay = await post(`/profiles/${profileAccount}`, {
+  ...profileFieldsToSave,
+  deadline: profileDeadline,
+  nonce: profileNonce,
+  signature: profileSignature,
+});
+check(
+  'a successful profile signature cannot be replayed',
+  profileReplay.status === 409,
+  `${profileReplay.status} ${profileReplay.body.error || ''}`
 );
 
 const profileReadResponse = await fetch(`${API}/profiles/${profileAccount}`, {
@@ -236,6 +349,21 @@ check(
   profileReadResponse.status === 200 && profileRead.profile?.displayName === 'Account Owner',
   `${profileReadResponse.status} ${profileRead.error || ''}`
 );
+
+const deleteDeadline = Date.now() + 60_000;
+const deleteNonce = newSignatureNonce();
+const deleteSignature = await profileOwner.signMessage(
+  profileWriteMessage(profileAccount, 'delete', profilePayloadHash({}), deleteDeadline, deleteNonce)
+);
+const profileDeleteResponse = await fetch(`${API}/profiles/${profileAccount}`, {
+  method: 'DELETE',
+  headers: {
+    'x-apnarecord-deadline': String(deleteDeadline),
+    'x-apnarecord-nonce': deleteNonce,
+    'x-apnarecord-signature': deleteSignature,
+  },
+});
+check('a separate delete signature can erase the profile', profileDeleteResponse.status === 200);
 
 const requestId = Date.now();
 const requestPatient = Wallet.createRandom().address;
@@ -331,15 +459,31 @@ check('the dripper is enabled and reports a balance', dripper.enabled === true, 
 
 group('recovery code rotation');
 
+const probeRecovery = { sealed: 'sealed-value', salt: 'salt-value', iterations: 600000 };
+const probeRecoveryHash = recoveryPayloadHash(probeRecovery);
 check(
-  'the client and server agree on the rotate message byte for byte',
-  rotateRecoveryMessage(probe, 1234567890) === serverRotateMessage(probe, 1234567890),
-  rotateRecoveryMessage(probe, 1234567890)
+  'the client and server agree on recovery payload hash and message',
+  probeRecoveryHash === serverRecoveryPayloadHash(probeRecovery) &&
+    recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline, probeNonce) ===
+      serverRotateMessage(probe, probeRecoveryHash, probeDeadline, probeNonce)
 );
 check(
-  'the rotate message binds the address and the timestamp',
-  rotateRecoveryMessage(probe, 1) !== rotateRecoveryMessage('0x0000000000000000000000000000000000000002', 1) &&
-    rotateRecoveryMessage(probe, 1) !== rotateRecoveryMessage(probe, 2)
+  'the recovery signature binds the address, payload, deadline and nonce',
+  recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline, probeNonce) !==
+    recoveryWriteMessage('0x0000000000000000000000000000000000000002', probeRecoveryHash, probeDeadline, probeNonce) &&
+    recoveryWriteMessage(probe, recoveryPayloadHash({ ...probeRecovery, salt: 'changed' }), probeDeadline, probeNonce) !==
+      recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline, probeNonce) &&
+    recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline + 1, probeNonce) !==
+      recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline, probeNonce) &&
+    recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline, `0x${'22'.repeat(32)}`) !==
+      recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline, probeNonce) &&
+    clientRotateRecoveryMessage(
+      probe,
+      probeRecoveryHash,
+      probeDeadline,
+      probeNonce,
+      otherDeployment
+    ) !== recoveryWriteMessage(probe, probeRecoveryHash, probeDeadline, probeNonce)
 );
 
 const rot = await enrolOne();
@@ -358,15 +502,35 @@ check(
 );
 
 const resealed = await sealPrivateKey(rot.privateKey, newCode);
-const rotTs = Date.now();
-const rotated = await post(`/wallet/${rotAccount}/rotate-recovery`, {
+const rotationPayload = {
   sealed: resealed.sealed,
   salt: resealed.salt,
   iterations: resealed.iterations,
-  timestamp: rotTs,
-  signature: await new Wallet(rot.privateKey).signMessage(rotateRecoveryMessage(rotAccount, rotTs)),
+};
+const rotDeadline = Date.now() + 60_000;
+const rotNonce = newSignatureNonce();
+const rotSignature = await new Wallet(rot.privateKey).signMessage(
+  recoveryWriteMessage(rotAccount, recoveryPayloadHash(rotationPayload), rotDeadline, rotNonce)
+);
+const changedRotation = await post(`/wallet/${rotAccount}/rotate-recovery`, {
+  ...rotationPayload,
+  iterations: resealed.iterations + 1,
+  deadline: rotDeadline,
+  nonce: rotNonce,
+  signature: rotSignature,
 });
+check('changed recovery parameters are refused', changedRotation.status === 403);
+
+const rotatedBody = {
+  ...rotationPayload,
+  deadline: rotDeadline,
+  nonce: rotNonce,
+  signature: rotSignature,
+};
+const rotated = await post(`/wallet/${rotAccount}/rotate-recovery`, rotatedBody);
 check('the rotation is accepted', rotated.status === 200, JSON.stringify(rotated.body).slice(0, 200));
+const rotationReplay = await post(`/wallet/${rotAccount}/rotate-recovery`, rotatedBody);
+check('a successful recovery rotation cannot be replayed', rotationReplay.status === 409);
 
 const after = (await get(`/wallet/${rotAccount}`)).enrolment;
 check('the stored blob is the new one', after.sealed === resealed.sealed, 'sealed value did not change');
@@ -387,36 +551,46 @@ check('the OLD code no longer opens it — the whole point of rotating', !oldSti
 group('rotation refuses what it should');
 
 const impostor = createWallet();
-const forgedTs = Date.now();
+const forgedDeadline = Date.now() + 60_000;
+const forgedNonce = newSignatureNonce();
 const forged = await post(`/wallet/${rotAccount}/rotate-recovery`, {
-  sealed: resealed.sealed,
-  salt: resealed.salt,
-  iterations: resealed.iterations,
-  timestamp: forgedTs,
-  signature: await new Wallet(impostor.privateKey).signMessage(rotateRecoveryMessage(rotAccount, forgedTs)),
+  ...rotationPayload,
+  deadline: forgedDeadline,
+  nonce: forgedNonce,
+  signature: await new Wallet(impostor.privateKey).signMessage(
+    recoveryWriteMessage(rotAccount, recoveryPayloadHash(rotationPayload), forgedDeadline, forgedNonce)
+  ),
 });
 check('a signature from a key that does not own this wallet is refused', forged.status === 403, `got ${forged.status}`);
 
 const neverEnrolled = createWallet();
-const unknownTs = Date.now();
+const unknownDeadline = Date.now() + 60_000;
+const unknownNonce = newSignatureNonce();
 const unknown = await post(`/wallet/${neverEnrolled.address}/rotate-recovery`, {
-  sealed: resealed.sealed,
-  salt: resealed.salt,
-  iterations: resealed.iterations,
-  timestamp: unknownTs,
+  ...rotationPayload,
+  deadline: unknownDeadline,
+  nonce: unknownNonce,
   signature: await new Wallet(neverEnrolled.privateKey).signMessage(
-    rotateRecoveryMessage(neverEnrolled.address, unknownTs)
+    recoveryWriteMessage(
+      neverEnrolled.address,
+      recoveryPayloadHash(rotationPayload),
+      unknownDeadline,
+      unknownNonce
+    )
   ),
 });
 check('an address that was never enrolled is refused', unknown.status === 404, `got ${unknown.status}`);
 
-const weakTs = Date.now();
+const weakDeadline = Date.now() + 60_000;
+const weakNonce = newSignatureNonce();
+const weakPayload = { ...rotationPayload, iterations: 1 };
 const weak = await post(`/wallet/${rotAccount}/rotate-recovery`, {
-  sealed: resealed.sealed,
-  salt: resealed.salt,
-  iterations: 1,
-  timestamp: weakTs,
-  signature: await new Wallet(rot.privateKey).signMessage(rotateRecoveryMessage(rotAccount, weakTs)),
+  ...weakPayload,
+  deadline: weakDeadline,
+  nonce: weakNonce,
+  signature: await new Wallet(rot.privateKey).signMessage(
+    recoveryWriteMessage(rotAccount, recoveryPayloadHash(weakPayload), weakDeadline, weakNonce)
+  ),
 });
 check('a downgraded iteration count is refused', weak.status === 400, `got ${weak.status}`);
 
@@ -427,14 +601,16 @@ check(
   `iterations now ${afterWeak.iterations}`
 );
 
-const staleTs = Date.now() - 10 * 60 * 1000;
+const staleDeadline = Date.now() - 1;
+const staleNonce = newSignatureNonce();
 const stale = await post(`/wallet/${rotAccount}/rotate-recovery`, {
-  sealed: resealed.sealed,
-  salt: resealed.salt,
-  iterations: resealed.iterations,
-  timestamp: staleTs,
-  signature: await new Wallet(rot.privateKey).signMessage(rotateRecoveryMessage(rotAccount, staleTs)),
+  ...rotationPayload,
+  deadline: staleDeadline,
+  nonce: staleNonce,
+  signature: await new Wallet(rot.privateKey).signMessage(
+    recoveryWriteMessage(rotAccount, recoveryPayloadHash(rotationPayload), staleDeadline, staleNonce)
+  ),
 });
-check('a stale signature is refused', stale.status === 403, `got ${stale.status}`);
+check('an expired signature is refused', stale.status === 403, `got ${stale.status}`);
 
 report();

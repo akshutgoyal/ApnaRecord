@@ -1,6 +1,10 @@
 import { ethers } from 'ethers';
 import { ProfileModel, isDbReady } from '../models/index.js';
-import { verifyMessageForAddress } from '../lib/signature.js';
+import {
+  claimOneUseNonce,
+  signedWriteDomain,
+  verifyDeadlineMessage,
+} from '../lib/signature.js';
 
 // Patient-owned display profiles.
 //
@@ -11,30 +15,28 @@ import { verifyMessageForAddress } from '../lib/signature.js';
 // A forged profile is worthless: change every name in this collection and
 // ownership, consent and verification are all unaffected. The chain decides those.
 
-const MAX_AGE_MS = 5 * 60 * 1000;
+const PROFILE_FIELDS = ['displayName', 'dateOfBirth', 'bloodGroup', 'allergies', 'emergencyContact'];
 
-/** The exact string the client must sign. Kept in one place so both sides agree. */
-export function profileMessage(address, timestamp) {
-  return (
-    'ApnaRecord profile update\n' +
-    `address: ${ethers.getAddress(address)}\n` +
-    `timestamp: ${timestamp}`
-  );
+/** Hash the exact fields written by a profile update, including omitted-vs-empty. */
+export function profilePayloadHash(fields = {}) {
+  const values = PROFILE_FIELDS.map((key) => [
+    Object.prototype.hasOwnProperty.call(fields, key),
+    typeof fields[key] === 'string' ? fields[key] : '',
+  ]);
+  return ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(values)));
 }
 
-/**
- * Recover the signer and confirm it is the address being written to.
- * Returns null when valid, or a reason string when not.
- */
-async function verifySignature(address, timestamp, signature) {
-  const result = await verifyMessageForAddress({
-    message: profileMessage(address, timestamp),
-    address,
-    timestamp,
-    signature,
-    maxAgeMs: MAX_AGE_MS,
-  });
-  return result.error || null;
+/** The exact string the client must sign. Kept in one place so both sides agree. */
+export function profileMessage(address, operation, dataHash, deadline, nonce, domain = signedWriteDomain()) {
+  return (
+    `ApnaRecord profile ${operation}\n` +
+    `chainId: ${domain.chainId}\n` +
+    `verifyingContract: ${domain.verifyingContract}\n` +
+    `address: ${ethers.getAddress(address)}\n` +
+    `payloadHash: ${String(dataHash).toLowerCase()}\n` +
+    `deadline: ${deadline}\n` +
+    `nonce: ${String(nonce).toLowerCase()}`
+  );
 }
 
 function requireDb(res) {
@@ -105,7 +107,7 @@ export async function getProfile(req, res) {
 
 /**
  * PUT /api/profiles/:address
- * Body: { displayName, dateOfBirth, bloodGroup, allergies, emergencyContact, timestamp, signature }
+ * Body: { displayName, dateOfBirth, bloodGroup, allergies, emergencyContact, deadline, nonce, signature }
  * Only the wallet that owns the address can write it.
  */
 export async function upsertProfile(req, res) {
@@ -115,26 +117,44 @@ export async function upsertProfile(req, res) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }
 
-  const { timestamp, signature, ...fields } = req.body || {};
-  if (!timestamp || !signature) {
+  const { deadline, nonce, signature, ...fields } = req.body || {};
+  if (!deadline || !nonce || !signature) {
     return res.status(400).json({
       error: 'SignatureRequired',
       message: 'A signed statement from the wallet is required to change a profile.',
     });
   }
 
-  const problem = await verifySignature(address, timestamp, signature);
-  if (problem) {
-    return res.status(403).json({ error: 'SignatureInvalid', message: problem });
+  for (const key of PROFILE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(fields, key) && typeof fields[key] !== 'string') {
+      return res.status(400).json({ error: 'BadRequest', message: `${key} must be text.` });
+    }
+    if (typeof fields[key] === 'string' && fields[key].length > 300) {
+      return res.status(400).json({ error: 'BadRequest', message: `${key} must be at most 300 characters.` });
+    }
+  }
+
+  const authorization = await verifyDeadlineMessage({
+    message: profileMessage(address, 'update', profilePayloadHash(fields), deadline, nonce),
+    address,
+    deadline,
+    nonce,
+    signature,
+  });
+  if (authorization.error) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
   }
 
   try {
+    const claim = await claimOneUseNonce({ bucket: 'signed-write', address, deadline, nonce });
+    if (claim) return res.status(claim.status).json({ error: claim.code, message: claim.error });
+
     const update = {
       verifiedBySignature: true,
       lastSignedAt: new Date(),
     };
-    for (const key of ['displayName', 'dateOfBirth', 'bloodGroup', 'allergies', 'emergencyContact']) {
-      if (typeof fields[key] === 'string') update[key] = fields[key].slice(0, 300);
+    for (const key of PROFILE_FIELDS) {
+      if (typeof fields[key] === 'string') update[key] = fields[key];
     }
 
     const profile = await ProfileModel.findOneAndUpdate(
@@ -168,16 +188,27 @@ export async function deleteProfile(req, res) {
   // history, and any `Referer` on a link followed from the page — all of which
   // outlive the request it was minted for. The query-string form is deliberately not
   // accepted as a fallback, because a fallback is just the hole left open.
-  const timestamp = req.get('x-apnarecord-timestamp');
+  const deadline = req.get('x-apnarecord-deadline');
+  const nonce = req.get('x-apnarecord-nonce');
   const signature = req.get('x-apnarecord-signature');
 
   if (!ethers.isAddress(address)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }
-  const problem = await verifySignature(address, timestamp, signature);
-  if (problem) return res.status(403).json({ error: 'SignatureInvalid', message: problem });
+  const authorization = await verifyDeadlineMessage({
+    message: profileMessage(address, 'delete', profilePayloadHash({}), deadline, nonce),
+    address,
+    deadline,
+    nonce,
+    signature,
+  });
+  if (authorization.error) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
+  }
 
   try {
+    const claim = await claimOneUseNonce({ bucket: 'signed-write', address, deadline, nonce });
+    if (claim) return res.status(claim.status).json({ error: claim.code, message: claim.error });
     await ProfileModel.deleteOne({ account: address.toLowerCase() });
     return res.json({
       ok: true,

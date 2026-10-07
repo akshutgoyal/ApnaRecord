@@ -1,9 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'ethers';
 import { useChain } from '../chain';
+import { CHAIN_ID, CONTRACT_ADDRESS } from '../contract';
 import { decryptRecord, fromBase64 } from '../crypto';
 import { chainEvents, releaseFile, patientLinks, rotateRecovery } from '../services/api';
-import { rotateRecoveryMessage } from '../lib/wireMessages';
+import {
+  newSignatureNonce,
+  recoveryPayloadHash,
+  rotateRecoveryMessage,
+} from '../lib/wireMessages';
 import { generateRecoveryCode, sealPrivateKey } from '../lib/keystore';
 import { getLocalSigner } from '../lib/session';
 import { useTx } from '../hooks/useTx';
@@ -66,13 +71,21 @@ export default function Patient() {
     try {
       const code = generateRecoveryCode();
       const sealed = await sealPrivateKey(signer.privateKey, code);
-      const timestamp = Date.now();
-      const signature = await signer.signMessage(rotateRecoveryMessage(account, timestamp));
+      const deadline = Date.now() + 5 * 60 * 1000;
+      const nonce = newSignatureNonce();
+      const payloadHash = recoveryPayloadHash(sealed);
+      const signature = await signer.signMessage(
+        rotateRecoveryMessage(account, payloadHash, deadline, nonce, {
+          chainId: CHAIN_ID,
+          verifyingContract: CONTRACT_ADDRESS,
+        })
+      );
       await rotateRecovery(account, {
         sealed: sealed.sealed,
         salt: sealed.salt,
         iterations: sealed.iterations,
-        timestamp,
+        deadline,
+        nonce,
         signature,
       });
       // Only shown once the server has accepted it. Displaying a code the server refused

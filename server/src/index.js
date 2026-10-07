@@ -46,6 +46,7 @@ const ALLOWED_HEADERS = [
   'Authorization',
   'x-apnarecord-viewer',
   'x-apnarecord-issued-at',
+  'x-apnarecord-deadline',
   'x-apnarecord-nonce',
   'x-apnarecord-signature',
   'x-apnarecord-timestamp',

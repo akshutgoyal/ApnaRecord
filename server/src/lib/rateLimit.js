@@ -5,13 +5,9 @@
 // on every deploy and every crash-loop, and two instances each kept their own, so
 // running a second instance silently doubled everyone's allowance.
 //
-// A NOTE ON FAILING OPEN. Every function here returns "allowed" when the database is
-// unreachable. That is deliberate and it is a real trade, so it is worth stating
-// plainly: these are abuse controls, not authorisation. If Mongo is down, refusing
-// every request would convert a database outage into a total outage, and the limits
-// they enforce are the difference between someone being annoying and someone being
-// expensive. The check that actually protects a record is the signature check, and
-// that never fails open.
+// Abuse counters fail open during a database outage because they are not the
+// authorization boundary. One-use signed-write claims are different: they fail closed
+// through `claimOnceStrict`, because a replay guard without a shared store is no guard.
 
 import { RateLimitModel, OneShotModel, isDbReady } from '../models/index.js';
 
@@ -71,6 +67,29 @@ export async function claimOnce(bucket, key, ttlMs) {
   } catch (error) {
     // 11000 is a duplicate key. Anything else is a real problem and must not be
     // reported as "already used", which would look like a replay to the caller.
+    if (error?.code === 11000) return false;
+    throw error;
+  }
+}
+
+/**
+ * Claim a security-sensitive one-use nonce. Unlike abuse controls, this must fail
+ * closed when the database is unavailable: without the unique index there is no
+ * replay protection to rely on.
+ *
+ * Returns true when claimed, false for a duplicate, and null when Mongo is not ready.
+ */
+export async function claimOnceStrict(bucket, key, ttlMs) {
+  if (!isDbReady()) return null;
+
+  try {
+    await OneShotModel.create({
+      bucket,
+      key,
+      expiresAt: new Date(Date.now() + ttlMs),
+    });
+    return true;
+  } catch (error) {
     if (error?.code === 11000) return false;
     throw error;
   }

@@ -7,7 +7,7 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 - [x] Restrict off-chain clinical metadata and identity labels to entitled viewers.
 - [x] Fund the owner EOA that submits account transactions, and check its balance before requesting a top-up.
 - [x] Carry the acting account separately from its owner signer through API authentication, profile writes, directory actions, and role checks; support contract signatures consistently.
-- [ ] Bind profile, recovery, and upload signatures to operation-specific payloads, deadlines, and one-use nonces.
+- [x] Bind profile, recovery, and upload signatures to operation-specific, chain/deployment-bound payloads, deadlines, and one-use nonces; authenticate encrypted bytes with their content key and prevent key replacement.
 - [ ] Make OTP verification, contact-grant consumption, and related attempt accounting atomic under concurrent requests.
 - [ ] Replace unsafe dripper nonce rewinds with durable cross-instance transaction state and safe retry/replacement behavior.
 - [ ] Stage uploads under unique identifiers and bind metadata to the confirmed mint receipt; keep unconfirmed uploads out of record listings.
@@ -27,4 +27,5 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 - Finding 1: scoped clinical metadata and identity labels to entitled viewers; committed.
 - Finding 2: enrolment and top-ups fund the transaction-paying owner EOA; the account remains the enrolled identity.
 - Queue item 3: API sessions and authorization now use the acting account; signed writes validate EIP-1271 account authorization and check roles against that account.
+- Queue item 4: signed profile, recovery, and upload writes bind the exact operation and stored data to the configured chain and contract, expire within five minutes, and atomically consume a shared nonce; uploads also validate their AES-GCM key and cannot replace a stored key with a different one.
 - Remaining fixes are to be handled in queue order. Update this file as each fix is committed.

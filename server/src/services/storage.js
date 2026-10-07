@@ -177,16 +177,53 @@ export async function hasBlob(digest) {
   }
 }
 
+function differentContentKeyError() {
+  const error = new Error('Ciphertext already has a different sealed content key; refusing to replace it.');
+  error.code = 'CONTENT_KEY_CONFLICT';
+  return error;
+}
+
+async function acceptExistingContentKey(digest, sealedBase64) {
+  const previous = openKey(await getSealedKey(digest));
+  const proposed = openKey(sealedBase64);
+  if (previous.toLowerCase() === proposed.toLowerCase()) return false;
+  throw differentContentKeyError();
+}
+
+/** Write a sealed key once; retries are safe only when they unwrap to the same key. */
 export async function putSealedKey(digest, sealedBase64) {
   if (objectStoreConfigured()) {
     const { PutObjectCommand } = await import('@aws-sdk/client-s3');
-    await (await objectStore()).send(
-      new PutObjectCommand({ Bucket: bucket(), Key: sealedKeyKey(digest), Body: sealedBase64 })
-    );
-    return;
+    try {
+      await (await objectStore()).send(
+        new PutObjectCommand({
+          Bucket: bucket(),
+          Key: sealedKeyKey(digest),
+          Body: sealedBase64,
+          IfNoneMatch: '*',
+        })
+      );
+      return true;
+    } catch (error) {
+      if (
+        error?.$metadata?.httpStatusCode === 412 ||
+        error?.$metadata?.httpStatusCode === 409 ||
+        error?.name === 'PreconditionFailed' ||
+        error?.name === 'ConditionalRequestConflict'
+      ) {
+        return acceptExistingContentKey(digest, sealedBase64);
+      }
+      throw error;
+    }
   }
   await ensureDir();
-  await fs.writeFile(keyPath(digest), sealedBase64, 'utf8');
+  try {
+    await fs.writeFile(keyPath(digest), sealedBase64, { encoding: 'utf8', flag: 'wx' });
+    return true;
+  } catch (error) {
+    if (error?.code === 'EEXIST') return acceptExistingContentKey(digest, sealedBase64);
+    throw error;
+  }
 }
 
 export async function getSealedKey(digest) {
