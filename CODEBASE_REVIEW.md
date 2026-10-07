@@ -4,7 +4,7 @@ Initial review: 7 October 2026, against commit `968dca7`.
 
 This review covers the Solidity contracts, API authorization and storage, enrolment and recovery, browser signing and encryption, indexing, dashboards, deployment configuration, and existing tests. Findings marked “reproduced” were demonstrated locally; others follow from the referenced code paths. No production service was probed.
 
-Follow-up on 7 October 2026: finding 1 was fixed by scoping off-chain metadata and identity labels to entitled viewers. Finding 2 was fixed by sending enrolment and top-up funds to the account owner's EOA, which pays for the outer `account.execute` transaction. Finding 6 was fixed by carrying the acting account separately from its signing EOA, using EIP-1271 validation for account signatures, and applying role checks to the acting account. These follow-up changes were not included in the original test run; findings 3–5 and 7–10 remain open.
+Follow-up on 8 October 2026: findings 1, 2, 3, 4, and 6 have been repaired and committed. Finding 1 scopes off-chain metadata and identity labels to entitled viewers. Finding 2 funds the account owner's EOA, which pays for the outer `account.execute` transaction. Finding 3 binds signed writes to operation-specific payloads and one-use nonces. Finding 4 makes OTPs, contact grants, and rate-limit accounting safe under concurrent requests. Finding 6 carries the acting account separately from its signing EOA, validates account signatures through EIP-1271, and checks roles on the acting account. Findings 5 and 7–10 remain open.
 
 ## Assessment
 
@@ -67,13 +67,15 @@ Recovery rotation signs only account address and timestamp, excluding the replac
 
 ### 4. High — OTP and contact grants are not single-use under concurrency
 
+**Status: repaired and committed.**
+
 References: `server/src/services/otp.js:126`, `:190`; `server/src/lib/rateLimit.js:31`.
 
 `verifyCode` reads an unconsumed OTP and subsequently saves `consumedAt`. Multiple requests can read the same state before any save completes and each issue a new grant. `consumeGrant` has the same read-then-save race. Wrong-guess counting also mutates an independently loaded document, allowing concurrent increments to overwrite each other. The shared rate limiter counts and then inserts, which can overshoot under concurrent requests.
 
-**Evidence, reproduced with the real service and isolated MongoDB:** Ten simultaneous calls successfully consumed the same contact grant. Ten simultaneous verifications of one correct OTP issued ten grants.
+**Evidence before repair, reproduced with the real service and isolated MongoDB:** Ten simultaneous calls successfully consumed the same contact grant. Ten simultaneous verifications of one correct OTP issued ten grants.
 
-**Repair:** Claim unconsumed, unexpired grants using one conditional `findOneAndUpdate`. Make OTP attempts and successful consumption atomic, with grant issuance handled consistently after the claim. Test simultaneous successful verifications, grant consumption, and incorrect guesses, across two instances.
+**Repair applied:** Wrong-code attempts increment only while the OTP is unconsumed, unexpired, and below the five-attempt limit. Successful verification conditionally consumes that same OTP before creating a grant, so only one concurrent request can issue a grant. Grant use is claimed by one conditional `findOneAndUpdate`. Rate limits use a unique shared row and a single Mongo update pipeline to prune and append hit timestamps, preserving the existing rolling-window behavior without count-then-insert overshoot. The contact integration suite now covers concurrent issuance, correct and incorrect verification, grant consumption across two API instances, and the rolling per-contact cap; those new assertions were not run during this repair.
 
 ### 5. High — existing cross-instance dripper tests fail on nonce reuse
 

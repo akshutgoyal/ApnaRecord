@@ -251,6 +251,7 @@ function serverEnv(port) {
     // A test has to be able to request two codes for one address; production keeps
     // the defaults and does not set these.
     CONTACT_RESEND_COOLDOWN_MS: '2000',
+    CONTACT_MAX_PER_HOUR: '2',
     CONTACT_MAX_PER_IP: '500',
   };
 }

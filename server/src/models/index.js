@@ -248,20 +248,8 @@ const ContactGrantSchema = new mongoose.Schema(
 ContactGrantSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 /**
- * Abuse counters.
- *
- * These used to live in `Map`s inside the controllers, which meant they were cleared
- * by every restart, reset by every deploy, and never shared — so running two
- * instances gave an attacker double the allowance, and a crash-loop gave them
- * unlimited attempts. A limiter that resets when you kick it is a speed bump.
- *
- * One document per hit, deliberately, rather than a counter per (bucket, key). A
- * counter document needs a read-modify-write or a conditional upsert to stay
- * correct, and getting that wrong silently under-counts; counting rows inside the
- * window is obvious and the TTL index keeps the collection small. The trade is that
- * two simultaneous requests can both read the same count and let one extra through —
- * acceptable for abuse control, and not acceptable for anything in `OneShotModel`
- * below, which is why that one is a unique index instead.
+ * Legacy per-hit rate-limit rows, retained so existing rows can expire through their
+ * TTL index. New hits are recorded by the atomic rolling-window model below.
  */
 const RateLimitSchema = new mongoose.Schema(
   {
@@ -274,6 +262,25 @@ const RateLimitSchema = new mongoose.Schema(
 );
 RateLimitSchema.index({ bucket: 1, key: 1, at: 1 });
 RateLimitSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+/**
+ * Atomic rolling-window abuse limits. Each unique (bucket, key) row stores at most
+ * `limit` accepted hit timestamps; conditional pruning and appending happen in one
+ * update, shared by every API instance.
+ */
+const RateLimitBucketSchema = new mongoose.Schema(
+  {
+    bucket: { type: String, required: true },
+    key: { type: String, required: true },
+    hits: { type: [Date], default: [] },
+    allowed: { type: Boolean, default: false },
+    updatedAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: false }
+);
+RateLimitBucketSchema.index({ bucket: 1, key: 1 }, { unique: true });
+RateLimitBucketSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 /**
  * A value that may be used exactly once — read-proof nonces, and anything else where
@@ -470,6 +477,8 @@ export const OtpModel = mongoose.models.Otp || mongoose.model('Otp', OtpSchema);
 export const ContactGrantModel =
   mongoose.models.ContactGrant || mongoose.model('ContactGrant', ContactGrantSchema);
 export const RateLimitModel = mongoose.models.RateLimit || mongoose.model('RateLimit', RateLimitSchema);
+export const RateLimitBucketModel =
+  mongoose.models.RateLimitBucket || mongoose.model('RateLimitBucket', RateLimitBucketSchema);
 export const OneShotModel = mongoose.models.OneShot || mongoose.model('OneShot', OneShotSchema);
 export const DripperModel = mongoose.models.Dripper || mongoose.model('Dripper', DripperSchema);
 export const DripLedgerModel =
@@ -487,6 +496,7 @@ export const allModels = [
   OtpModel,
   ContactGrantModel,
   RateLimitModel,
+  RateLimitBucketModel,
   OneShotModel,
   DripperModel,
   DripLedgerModel,

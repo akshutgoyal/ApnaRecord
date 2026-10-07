@@ -22,7 +22,7 @@ working data.
 | Suite | Needs | Covers |
 |---|---|---|
 | `unit/email.test.mjs` | nothing | Address normalisation and masking, the keyed hash, code and token crypto, and each relay adapter against a stub HTTP endpoint |
-| `integration/contact.test.mjs` | API + MongoDB | Requesting a code, the resend cooldown, the oneshot and hourly caps, the five-guess lockout, and a grant being single-use |
+| `integration/contact.test.mjs` | API + MongoDB | Requesting a code, the resend cooldown and rolling hourly cap, cross-instance races for code issuance/verification and grant consumption, the five-guess lockout, and a grant being single-use |
 | `integration/wallet.test.mjs` | API + MongoDB + chain | Enrolment requiring **both** proofs, the sealed blob opening only with the recovery code, a spent grant, lookup by address, and concurrent enrolments producing no nonce collision |
 
 ## Three assertions worth knowing about, because they are easy to weaken by accident

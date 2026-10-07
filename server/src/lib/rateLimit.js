@@ -9,37 +9,82 @@
 // authorization boundary. One-use signed-write claims are different: they fail closed
 // through `claimOnceStrict`, because a replay guard without a shared store is no guard.
 
-import { RateLimitModel, OneShotModel, isDbReady } from '../models/index.js';
+import { RateLimitBucketModel, OneShotModel, isDbReady } from '../models/index.js';
 
 /**
- * Count one hit against a window. Returns true while the caller is still within the
- * limit, false once they are over it.
+ * Record one hit in an atomic rolling window. Returns false when the number of
+ * accepted hits in the window has reached `limit`.
  *
  * `bucket` names the control ("otp-ip", "lookup-ip"); `key` is who it applies to.
- * Together they are the identity of the window.
+ * Together they identify a shared row. The update pipeline prunes old hits and
+ * conditionally appends the current one in a single document update, so concurrent
+ * requests across instances cannot count the same pre-insert state.
  */
 export async function noteHit(bucket, key, limit, windowMs) {
   if (!isDbReady()) return true;
+  if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isFinite(windowMs) || windowMs <= 0) {
+    throw new RangeError('Rate limit capacity and window must be positive.');
+  }
 
-  const since = new Date(Date.now() - windowMs);
-  const used = await RateLimitModel.countDocuments({ bucket, key, at: { $gte: since } });
-  if (used >= limit) return false;
+  const now = new Date();
+  const pipeline = [
+    {
+      $set: {
+        _effectiveNow: {
+          $max: [{ $ifNull: ['$updatedAt', { $literal: now }] }, { $literal: now }],
+        },
+      },
+    },
+    {
+      $set: {
+        _recentHits: {
+          $filter: {
+            input: { $ifNull: ['$hits', []] },
+            as: 'hit',
+            cond: { $gte: ['$$hit', { $subtract: ['$_effectiveNow', windowMs] }] },
+          },
+        },
+      },
+    },
+    {
+      $set: {
+        _allowed: { $lt: [{ $size: '$_recentHits' }, limit] },
+      },
+    },
+    {
+      $set: {
+        allowed: '$_allowed',
+        hits: {
+          $cond: [
+            '$_allowed',
+            { $concatArrays: ['$_recentHits', ['$_effectiveNow']] },
+            '$_recentHits',
+          ],
+        },
+        updatedAt: '$_effectiveNow',
+        expiresAt: { $add: ['$_effectiveNow', windowMs] },
+      },
+    },
+    { $unset: ['_effectiveNow', '_recentHits', '_allowed'] },
+  ];
 
-  await RateLimitModel.create({
-    bucket,
-    key,
-    at: new Date(),
-    // The TTL index removes the row for us. It is set to the end of the window, so
-    // anything older than a window cannot count towards it and is safe to drop.
-    expiresAt: new Date(Date.now() + windowMs),
-  });
-  return true;
-}
+  // A simultaneous first request may race to upsert the unique row. The loser
+  // retries against the winner's row and atomically counts against its hit window.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      const state = await RateLimitBucketModel.findOneAndUpdate(
+        { bucket, key },
+        pipeline,
+        { upsert: true, new: true }
+      ).lean();
+      return Boolean(state?.allowed);
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+    }
+  }
 
-/** How many hits are inside the window right now, without recording one. */
-export async function hitsInWindow(bucket, key, windowMs) {
-  if (!isDbReady()) return 0;
-  return RateLimitModel.countDocuments({ bucket, key, at: { $gte: new Date(Date.now() - windowMs) } });
+  // Sustained index contention is refused rather than allowed to bypass the limit.
+  return false;
 }
 
 /**

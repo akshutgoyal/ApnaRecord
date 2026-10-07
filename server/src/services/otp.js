@@ -80,13 +80,19 @@ export async function requestCode(rawContact, purpose = 'enrol') {
       });
     }
   }
-  // Counted through the rate limiter, NOT from the OTP rows above.
-  //
-  // Those rows carry a TTL of CODE_TTL_MS — five minutes — so a query asking for the
-  // last hour can only ever see five minutes' worth, and "five per hour" was really
-  // "five per five minutes": twelve times the intended rate. The limiter's own rows
-  // expire at the end of the window they belong to, so the count and the window mean
-  // the same thing at last.
+
+  // The OTP lookup above gives a useful wait time for sequential calls, but it is
+  // not a concurrency guard. A shared single-hit cooldown closes the gap when several
+  // requests inspect the same empty state at once.
+  if (!(await noteHit('otp-cooldown', hmac, 1, RESEND_COOLDOWN_MS))) {
+    const wait = Math.ceil(RESEND_COOLDOWN_MS / 1000);
+    throw Object.assign(new Error(`A code was just sent. Try again in ${wait} second(s).`), {
+      code: 'TooManyRequests',
+    });
+  }
+
+  // Counted through the shared rolling-window limiter, not from OTP rows. OTP rows
+  // expire after five minutes, while this cap must account for the full preceding hour.
   if (!(await noteHit('otp-contact', hmac, MAX_CODES_PER_HOUR, 60 * 60 * 1000))) {
     throw Object.assign(
       new Error('Too many codes requested for that address. Try again in an hour.'),
@@ -134,7 +140,9 @@ export async function verifyCode(rawContact, submitted, purpose = 'enrol') {
     purpose,
     consumedAt: null,
     expiresAt: { $gt: new Date() },
-  }).sort({ createdAt: -1 });
+  })
+    .sort({ createdAt: -1 })
+    .lean();
 
   if (!record) {
     throw Object.assign(
@@ -151,10 +159,37 @@ export async function verifyCode(rawContact, submitted, purpose = 'enrol') {
   }
 
   if (!timingSafeEqual(record.codeHash, hashCode(hmac, String(submitted || '').trim()))) {
-    // Counted before throwing, so five guesses is genuinely five.
-    record.attempts += 1;
-    await record.save();
-    const left = MAX_ATTEMPTS - record.attempts;
+    // Compare-and-increment in one database operation. Concurrent wrong guesses
+    // cannot overwrite one another's attempt count or pass the five-guess ceiling.
+    const attemptAt = new Date();
+    const attempted = await OtpModel.findOneAndUpdate(
+      {
+        _id: record._id,
+        contactHmac: hmac,
+        purpose,
+        consumedAt: null,
+        expiresAt: { $gt: attemptAt },
+        attempts: { $lt: MAX_ATTEMPTS },
+      },
+      { $inc: { attempts: 1 } },
+      { new: true }
+    ).lean();
+
+    if (!attempted) {
+      const current = await OtpModel.findById(record._id).lean();
+      if (current && !current.consumedAt && current.expiresAt > new Date() && current.attempts >= MAX_ATTEMPTS) {
+        throw Object.assign(
+          new Error('Too many wrong guesses on that code. Request a new one.'),
+          { code: 'CodeLocked' }
+        );
+      }
+      throw Object.assign(
+        new Error('That code has expired or was never requested. Request a new one.'),
+        { code: 'CodeExpired' }
+      );
+    }
+
+    const left = MAX_ATTEMPTS - attempted.attempts;
     throw Object.assign(
       new Error(
         left > 0
@@ -165,8 +200,36 @@ export async function verifyCode(rawContact, submitted, purpose = 'enrol') {
     );
   }
 
-  record.consumedAt = new Date();
-  await record.save();
+  // Only one concurrent correct submission can change an active OTP from unused to
+  // consumed. The attempts predicate makes the fifth wrong guess terminal even when
+  // a correct request is racing it.
+  const consumedAt = new Date();
+  const consumed = await OtpModel.findOneAndUpdate(
+    {
+      _id: record._id,
+      contactHmac: hmac,
+      purpose,
+      codeHash: record.codeHash,
+      consumedAt: null,
+      expiresAt: { $gt: consumedAt },
+      attempts: { $lt: MAX_ATTEMPTS },
+    },
+    { $set: { consumedAt } },
+    { new: true }
+  ).lean();
+  if (!consumed) {
+    const current = await OtpModel.findById(record._id).lean();
+    if (current && !current.consumedAt && current.expiresAt > new Date() && current.attempts >= MAX_ATTEMPTS) {
+      throw Object.assign(
+        new Error('Too many wrong guesses on that code. Request a new one.'),
+        { code: 'CodeLocked' }
+      );
+    }
+    throw Object.assign(
+      new Error('That code has expired or was never requested. Request a new one.'),
+      { code: 'CodeExpired' }
+    );
+  }
 
   const token = generateGrantToken();
   await ContactGrantModel.create({
@@ -196,16 +259,23 @@ export async function consumeGrant(token) {
   }
 
   const hash = hashGrantToken(String(token));
-  const grant = await ContactGrantModel.findOne({ tokenHash: hash });
+  const consumedAt = new Date();
+  const grant = await ContactGrantModel.findOneAndUpdate(
+    {
+      tokenHash: hash,
+      consumedAt: null,
+      expiresAt: { $gt: consumedAt },
+    },
+    { $set: { consumedAt } },
+    { new: true }
+  ).lean();
 
-  if (!grant || grant.consumedAt || grant.expiresAt <= new Date()) {
+  if (!grant) {
     throw Object.assign(
       new Error('That verification has expired. Verify the address again.'),
       { code: 'ContactVerificationExpired' }
     );
   }
 
-  grant.consumedAt = new Date();
-  await grant.save();
   return { contactHmac: grant.contactHmac, contactMasked: grant.contactMasked };
 }

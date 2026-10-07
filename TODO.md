@@ -8,7 +8,7 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 - [x] Fund the owner EOA that submits account transactions, and check its balance before requesting a top-up.
 - [x] Carry the acting account separately from its owner signer through API authentication, profile writes, directory actions, and role checks; support contract signatures consistently.
 - [x] Bind profile, recovery, and upload signatures to operation-specific, chain/deployment-bound payloads, deadlines, and one-use nonces; authenticate encrypted bytes with their content key and prevent key replacement.
-- [ ] Make OTP verification, contact-grant consumption, and related attempt accounting atomic under concurrent requests.
+- [x] Make OTP verification, contact-grant consumption, and related attempt accounting atomic under concurrent requests.
 - [ ] Replace unsafe dripper nonce rewinds with durable cross-instance transaction state and safe retry/replacement behavior.
 - [ ] Stage uploads under unique identifiers and bind metadata to the confirmed mint receipt; keep unconfirmed uploads out of record listings.
 - [ ] Authorize facility data against current chain links and roles, and make index catch-up complete and reorg-aware.
@@ -28,4 +28,5 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 - Finding 2: enrolment and top-ups fund the transaction-paying owner EOA; the account remains the enrolled identity.
 - Queue item 3: API sessions and authorization now use the acting account; signed writes validate EIP-1271 account authorization and check roles against that account.
 - Queue item 4: signed profile, recovery, and upload writes bind the exact operation and stored data to the configured chain and contract, expire within five minutes, and atomically consume a shared nonce; uploads also validate their AES-GCM key and cannot replace a stored key with a different one.
+- Queue item 5: OTP consumption and wrong-attempt increments use conditional atomic updates, grants are consumed with a single-use claim, and rate limits use a shared atomic rolling-window row. Added cross-instance concurrency and per-contact cap coverage.
 - Remaining fixes are to be handled in queue order. Update this file as each fix is committed.
