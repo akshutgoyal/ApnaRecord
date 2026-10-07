@@ -331,7 +331,8 @@ export function ChainProvider({ children }) {
    * THERE ARE TWO KINDS OF OWNER, AND THEY NEED DIFFERENT PATHS. A wallet created here
    * owns its records through an ACCOUNT, so the call has to be wrapped in
    * `account.execute(...)`: `msg.sender` at ApnaRecord must be the account, and the
-   * signing key owns nothing — calling directly reverts. A demo persona or a connected
+   * signing key owns nothing — calling directly reverts. The owner's EOA still submits
+   * and pays gas for the outer `execute` transaction. A demo persona or a connected
    * browser wallet owns records as itself and calls directly.
    *
    * That split is what makes the account additive rather than a migration. It is also
@@ -369,9 +370,8 @@ export function ChainProvider({ children }) {
           throw new Error('No account is unlocked, so there is nothing to sign with.');
         }
 
-        // Top up the ACCOUNT before writing. Failing to top up must never block the
-        // write — if it genuinely cannot pay, the transaction says so more precisely
-        // than a warning could.
+        // Top up the owner key that pays for account.execute. A failed top-up must not
+        // block the write; the transaction reports an insufficient balance directly.
         try {
           await ensureGas(signer, account);
         } catch (error) {
@@ -452,11 +452,8 @@ export function ChainProvider({ children }) {
   const topUpGas = useCallback(async () => {
     const local = getLocalSigner();
     if (!local) throw new Error('Only a wallet created here can be topped up.');
-    // The ACCOUNT, not the signing key. The server keys enrolments by the account, funds
-    // the account, and the account is what sends transactions; the key holds no records
-    // and spends nothing. Omitting it funded the key and then asked to top up an address
-    // that was never enrolled, so the button could only ever fail — and `gas.js` states
-    // this invariant in its own comment.
+    // The account identifies the enrolment; the owner key is the transaction payer and
+    // receives the funds. The signature binds the request to the enrolled account.
     return ensureGas(local, sessionAddress());
   }, []);
 

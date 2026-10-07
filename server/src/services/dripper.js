@@ -257,17 +257,9 @@ export function nonceWasUnused(error) {
   return PRE_BROADCAST_ACTIONS.has(error?.action);
 }
 
-// A drip goes to an ACCOUNT CONTRACT, so a plain-transfer gas limit is wrong. Its
-// receive() pushes the cost past 21,000 and the transfer runs out of gas and
-// reverts -- after being signed, broadcast and paid for.
-//
-// This is not hypothetical. A drip estimated 21,000 while the account was still
-// deploying, the account landed mid-flight, and the transfer needed 22,827. It
-// reverted, the dripper paid for it, and the ledger recorded a successful top-up.
-//
-// Unused gas is refunded, so being generous costs nothing; being exact costs a
-// silently unfunded account.
-const DRIP_GAS_LIMIT = 60_000n;
+// Enrolment and top-up grants go to the account owner's EOA. The account contract is
+// the identity used by ApnaRecord, but the owner pays gas for the outer execute call.
+const DRIP_GAS_LIMIT = 21_000n;
 
 async function send(to, value) {
   const w = getWallet();
@@ -473,13 +465,23 @@ export async function dripperStatus() {
 
 /**
  * Fund an address if it needs it. Returns what happened rather than throwing, so
- * an enrolment can still succeed when the drip is skipped — the wallet is created
- * either way, and a user with a wallet but no gas is a recoverable state.
+ * an enrolment can still succeed when the drip is skipped — the account is created
+ * either way, and an owner key without gas can be funded later.
  */
-export async function ensureFunded(address, { reason = 'enrolment', contactHmac = null } = {}) {
+export async function ensureFunded(
+  recipientAddress,
+  { reason = 'enrolment', contactHmac = null, enrolmentAddress = recipientAddress } = {}
+) {
   if (!dripEnabled()) {
     return { ok: false, skipped: true, reason: 'dripper not configured' };
   }
+
+  if (!ethers.isAddress(recipientAddress) || !ethers.isAddress(enrolmentAddress)) {
+    throw new Error('A valid recipient and enrolment address are required to fund a wallet.');
+  }
+
+  const recipient = ethers.getAddress(recipientAddress);
+  const enrolment = ethers.getAddress(enrolmentAddress);
 
   // The nonce claim and the daily cap both live in the database, and without it there
   // is no safe way to hand out a nonce. A skipped drip is recoverable — the wallet
@@ -490,7 +492,7 @@ export async function ensureFunded(address, { reason = 'enrolment', contactHmac 
 
   return serialise(async () => {
     const w = getWallet();
-    const balance = await w.provider.getBalance(address);
+    const balance = await w.provider.getBalance(recipient);
 
     if (balance >= FLOOR) {
       return { ok: true, skipped: true, reason: 'already funded', balanceEth: ethers.formatEther(balance) };
@@ -509,7 +511,7 @@ export async function ensureFunded(address, { reason = 'enrolment', contactHmac 
           { contactHmac, dripCount: { $lt: MAX_PER_CONTACT } },
           {
             $inc: { dripCount: 1 },
-            $set: { address: address.toLowerCase(), at: new Date() },
+            $set: { address: recipient.toLowerCase(), at: new Date() },
             $setOnInsert: { contactHmac },
           },
           { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -544,7 +546,7 @@ export async function ensureFunded(address, { reason = 'enrolment', contactHmac 
     if (spent + AMOUNT > DAILY_CAP) {
       console.warn(
         `[Dripper] Daily cap reached (${ethers.formatEther(spent)} spent). ` +
-          `Refusing to fund ${address}.`
+          `Refusing to fund ${recipient}.`
       );
       await releaseClaim();
       return { ok: false, skipped: true, reason: 'daily cap reached', spentEth: ethers.formatEther(spent) };
@@ -564,7 +566,7 @@ export async function ensureFunded(address, { reason = 'enrolment', contactHmac 
 
     let txHash;
     try {
-      txHash = await send(address, AMOUNT);
+      txHash = await send(recipient, AMOUNT);
     } catch (error) {
       // The send failed. Hand the claim back, because a contact whose one drip was
       // burned by an RPC hiccup has no way to recover it.
@@ -578,16 +580,16 @@ export async function ensureFunded(address, { reason = 'enrolment', contactHmac 
     }
 
     if (reason === 'top-up') {
-      await EnrolmentModel.updateOne({ address: address.toLowerCase() }, { $inc: { 'drip.topUps': 1 } });
+      await EnrolmentModel.updateOne({ address: enrolment.toLowerCase() }, { $inc: { 'drip.topUps': 1 } });
     }
     await EnrolmentModel.updateOne(
-      { address: address.toLowerCase() },
+      { address: enrolment.toLowerCase() },
       { $set: { 'drip.amount': AMOUNT.toString(), 'drip.txHash': txHash, 'drip.at': new Date() } }
     );
 
     await noteSpendToday();
 
-    console.log(`[Dripper] Sent ${ethers.formatEther(AMOUNT)} ETH to ${address} (${txHash})`);
+    console.log(`[Dripper] Sent ${ethers.formatEther(AMOUNT)} ETH to ${recipient} for ${enrolment} (${txHash})`);
     return { ok: true, skipped: false, txHash, amountEth: ethers.formatEther(AMOUNT) };
   });
 }

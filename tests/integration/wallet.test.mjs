@@ -131,6 +131,12 @@ group('enrolment');
 const first = await enrolOne();
 check('an enrolment with both proofs succeeds', first.created.status === 201, JSON.stringify(first.created.body).slice(0, 200));
 check('a drip transaction comes back', Boolean(first.created.body.drip?.txHash), JSON.stringify(first.created.body.drip));
+const firstDripLog = fs.existsSync(MOCK_LOG) ? fs.readFileSync(MOCK_LOG, 'utf8') : '';
+check(
+  'the drip funds the owner key that pays account transactions',
+  firstDripLog.split('\n').some((line) => line.includes('drip ') && line.includes(`→ ${first.owner.toLowerCase()} `)),
+  first.owner
+);
 check('the address is echoed back masked', /^w•••@example\.com$/.test(first.created.body.emailMasked || ''), first.created.body.emailMasked);
 
 group('what was actually stored');

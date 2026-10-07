@@ -42,38 +42,35 @@ const TOPUP_WAIT_MS = 30_000;
 const POLL_MS = 2_000;
 
 /**
- * Ask for a top-up if the account is running low, and wait a bounded time for it.
+ * Ask for a top-up if the owner key is running low, and wait a bounded time for it.
  *
  * Never throws. A top-up that fails is not a reason to block a write: the write reports
  * its own honest error if it genuinely cannot pay for itself, and that error is more
  * useful than one from the funding step.
  *
- * The balance checked — and the address funded — is the ACCOUNT, not the signing key.
- * Since records moved to accounts, every write is sent BY the account, so the account is
- * what has to hold gas. A top-up sent to the key would leave the account unable to do
- * anything while looking like it succeeded.
- *
- * The signature still comes from the key, because an account cannot sign. The server
- * verifies that the caller controls the account it is asking to fund.
+ * The account address identifies the enrolment and is signed for the server check. The
+ * owner key submits account.execute and pays the outer transaction fee, so its EOA
+ * balance is what we check and wait for.
  */
 export async function ensureGas(signer, accountAddress) {
-  const address = accountAddress || (await signer.getAddress());
+  const enrolledAccount = accountAddress || (await signer.getAddress());
+  const payerAddress = await signer.getAddress();
   const provider = signer.provider;
 
-  const before = await provider.getBalance(address);
+  const before = await provider.getBalance(payerAddress);
   if (before >= CLIENT_FLOOR_WEI) {
     return { ok: true, skipped: true, reason: 'enough gas', balanceWei: before.toString() };
   }
 
   const timestamp = Date.now();
-  const signature = await signer.signMessage(dripMessage(address, timestamp));
+  const signature = await signer.signMessage(dripMessage(enrolledAccount, timestamp));
 
   let requested;
   try {
-    requested = await requestDrip(address, { timestamp, signature });
+    requested = await requestDrip(enrolledAccount, { timestamp, signature });
   } catch (error) {
     // Asked and refused — a spent per-contact allowance, or a float that is out. Say so
-    // and let the write proceed; it may still succeed on what the account already holds.
+    // and let the write proceed; it may still succeed on what the owner key already holds.
     return {
       ok: false,
       waitedMs: 0,
@@ -88,7 +85,7 @@ export async function ensureGas(signer, accountAddress) {
   while (Date.now() - started < TOPUP_WAIT_MS) {
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     try {
-      balance = await provider.getBalance(address);
+      balance = await provider.getBalance(payerAddress);
     } catch {
       // A provider hiccup mid-wait is not a reason to stop waiting; the next poll may
       // well succeed, and the deadline bounds it either way.

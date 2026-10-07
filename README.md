@@ -231,9 +231,10 @@ once the signer matches the claimed viewer does the contract get asked. Note tha
 record's owner signs**: there is no "but they own it" shortcut, because that shortcut is
 where the hole lived.
 
-**Gas is nobody's problem.** Wallets are funded at enrolment and top themselves up before a
-write when they run low, so no user ever acquires test ETH. The float's health — balance,
-and how many enrolments it still covers — is on the startup banner and at `GET /api/dripper`,
+**Gas is nobody's problem.** The owner's signing key is funded at enrolment and topped up
+before account writes when its balance runs low. The account remains the on-chain identity,
+while its owner pays the outer `execute` transaction fee. The float's health — balance, and
+how many enrolments it still covers — is on the startup banner and at `GET /api/dripper`,
 because an emptied float is the one failure that looks like success.
 
 ---
@@ -310,8 +311,9 @@ DATABASE_URL=          # optional — blank means "rebuild from the chain"
 Chain values (`RPC_URL`, `CONTRACT_ADDRESS`, `CONTRACT_DEPLOY_BLOCK`) already
 point at the deployed contract — leave them unless you deploy your own.
 
-**Optional: the gas float.** This is what lets a new account act without anyone acquiring
-test ETH. Generate a wallet and add it to `server/.env`:
+**Optional: the gas float.** This funds each account owner's signing key so it can pay for
+`account.execute` transactions without anyone acquiring test ETH. Generate a wallet and
+add it to `server/.env`:
 
 ```bash
 npm run dripper:new          # prints an address and a private key
@@ -427,8 +429,8 @@ CONTRACT_ADDRESS=
 CONTRACT_DEPLOY_BLOCK=
 
 DRIPPER_PRIVATE_KEY=                    # npm run dripper:new — fund the address it prints
-DRIP_AMOUNT=0.002                       # per new wallet. L2 gas, so hundreds of writes each
-DRIP_FLOOR=0.0005                       # top up only when a wallet falls below this
+DRIP_AMOUNT=0.002                       # per new owner key. L2 gas, so hundreds of writes each
+DRIP_FLOOR=0.0005                       # top up only when the owner key falls below this
 DRIP_DAILY_CAP=1.0                      # circuit breaker, per calendar day
 DRIP_LOW_WATER=0.05                     # warn loudly below this
 

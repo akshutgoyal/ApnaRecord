@@ -9,7 +9,7 @@
 //     node tests/manual/base-proof.mjs
 //
 // It needs a running API whose DRIPPER_PRIVATE_KEY is funded. Each run costs the float
-// about 0.0104 ETH (the drip plus the account deployment, which the float also pays).
+// about 0.0104 ETH (the owner-key drip plus the account deployment).
 
 import { Wallet, JsonRpcProvider, Contract, Interface } from 'ethers';
 import {
@@ -67,7 +67,7 @@ const signature = await new Wallet(privateKey).signMessage(enrolMessage(address,
 console.log(`   signing key   ${address}`);
 
 // ---------------------------------------------------------------- 3. enrolment
-step(3, 'enrol — this deploys the account and drips 0.01 ETH, both real transactions');
+step(3, 'enrol — this deploys the account and drips 0.01 ETH to its owner key');
 const enrolled = await post('/wallet/enrol', {
   address,
   // Sent, not omitted. This suite used to enrol without a role, so every row it
@@ -115,11 +115,11 @@ if (account) {
   // same thing the browser has to do, and the reason `ensureGas` exists.
   let balance = 0n;
   for (let i = 0; i < 40; i += 1) {
-    balance = await provider.getBalance(account);
+    balance = await provider.getBalance(owner);
     if (balance > 0n) break;
     await new Promise((r) => setTimeout(r, 3000));
   }
-  ok('it holds the dripped gas', balance > 0n, `${Number(balance) / 1e18} ETH`);
+  ok('the owner key holds the gas for account.execute', balance > 0n, `${Number(balance) / 1e18} ETH`);
 
   const waitReceipt = async (hash) => {
     for (let i = 0; i < 40; i += 1) {

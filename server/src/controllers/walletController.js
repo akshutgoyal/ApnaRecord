@@ -298,19 +298,24 @@ export async function enrol(req, res) {
       throw error;
     }
 
-    // Fund the ACCOUNT, not the signing key. Every action goes through the account, so
-    // the account is what needs gas; sending it to the key would leave the account
-    // unable to do anything at all.
+    // The owner key submits account.execute and pays for that outer transaction. The
+    // account contract is msg.sender only for the inner ApnaRecord call, so funding it
+    // does not pay for the owner's transaction.
     //
-    // The contact goes with it, so the drip is limited per person rather than per
-    // address — a rebind gives a new address with the same contact.
+    // Keep the enrolment address for bookkeeping; send funds to the owner EOA. The
+    // contact limit follows the person through a rebind.
     let drip;
     try {
-      drip = await ensureFunded(enrolment.address, { contactHmac: grant.contactHmac });
+      drip = await ensureFunded(enrolment.owner, {
+        enrolmentAddress: enrolment.address,
+        contactHmac: grant.contactHmac,
+      });
     } catch (error) {
       // The account exists and the blob is stored. Failing the whole enrolment because
       // the float hiccuped would lose an account we can still fund later.
-      console.warn(`[Wallet] Enrolled ${enrolment.address} but the drip failed: ${error.message}`);
+      console.warn(
+        `[Wallet] Enrolled ${enrolment.address} but the owner-key drip failed: ${error.message}`
+      );
       drip = { ok: false, skipped: true, reason: error.message };
     }
 
@@ -556,8 +561,9 @@ export async function requestDrip(req, res) {
     const problem = verify(dripMessage(address, timestamp), enrolment.owner, timestamp, signature);
     if (problem) return res.status(403).json({ error: 'SignatureInvalid', message: problem });
 
-    const result = await ensureFunded(address, {
+    const result = await ensureFunded(enrolment.owner, {
       reason: 'top-up',
+      enrolmentAddress: enrolment.address,
       contactHmac: enrolment.identity?.emailHmac || null,
     });
     return res.json({ ok: result.ok, ...result });

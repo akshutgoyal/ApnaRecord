@@ -4,7 +4,7 @@ Initial review: 7 October 2026, against commit `968dca7`.
 
 This review covers the Solidity contracts, API authorization and storage, enrolment and recovery, browser signing and encryption, indexing, dashboards, deployment configuration, and existing tests. Findings marked “reproduced” were demonstrated locally; others follow from the referenced code paths. No production service was probed.
 
-Follow-up on 7 October 2026: the off-chain metadata exposure in finding 1 was addressed in the working tree. Anonymous dashboards now return aggregate chain facts only; other viewers receive subject-scoped rows, facility access is checked against current chain state, and public record audit/history/identity routes no longer expose unscoped off-chain fields. This follow-up was not included in the original test run; other findings remain open.
+Follow-up on 7 October 2026: finding 1 was fixed by scoping off-chain metadata and identity labels to entitled viewers. Finding 2 was fixed by sending enrolment and top-up funds to the account owner's EOA, which pays for the outer `account.execute` transaction; the account contract remains the on-chain identity. These follow-up changes were not included in the original test run; findings 3–10 remain open.
 
 ## Assessment
 

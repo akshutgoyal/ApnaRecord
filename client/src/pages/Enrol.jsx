@@ -393,14 +393,14 @@ export default function Enrol() {
 
         {result.drip && !result.drip.skipped && (
           <p className="mt-5 text-xs text-success-700">
-            Your wallet has been funded with {result.drip.amountEth} test ETH, so you can act
-            straight away without buying anything.
+            Your signing key has been funded with {result.drip.amountEth} test ETH, so you can
+            submit account actions straight away without buying anything.
           </p>
         )}
         {result.drip?.skipped && (
           <p className="mt-5 text-xs text-warn-700">
-            Your wallet was created, but it could not be funded automatically (
-            {result.drip.reason}). Anything that writes to the chain will fail until it has gas.
+            Your wallet was created, but its signing key could not be funded automatically (
+            {result.drip.reason}). Account actions will fail until the signing key has gas.
           </p>
         )}
 
