@@ -77,49 +77,92 @@ let refreshing = null;
  * counts and consent windows is not a meaningful difference — and the `stale` flag
  * says so honestly rather than pretending the numbers are live to the second.
  */
-/**
- * The same payload with every name removed.
- *
- * The cache is shared, so a label cannot live inside it per-viewer — but a label also
- * must not go to a caller who has not proved a wallet. So the cache keeps the full
- * payload and the response is redacted on the way out.
- *
- * A count of "two facilities" is public. Which two is the directory, and that stays
- * behind a proof. Nulled rather than deleted so the shape a dashboard destructures
- * never changes.
- */
-const LABEL_KEY = /^(label|.*Label)$/i;
-function withoutLabels(value) {
-  if (Array.isArray(value)) return value.map(withoutLabels);
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [key, inner] of Object.entries(value)) {
-      out[key] = LABEL_KEY.test(key) ? null : withoutLabels(inner);
-    }
-    return out;
-  }
-  return value;
+/** Public dashboard facts only; clinical rows and directory data require scope. */
+function publicStats(payload) {
+  return {
+    generatedAt: payload.generatedAt,
+    cached: payload.cached,
+    stale: payload.stale,
+    refreshing: payload.refreshing,
+    cacheAgeMs: payload.cacheAgeMs,
+    chain: payload.chain,
+    totals: payload.totals,
+    identitiesByRole: payload.identitiesByRole,
+    eventsByType: payload.eventsByType,
+    activityByDay: payload.activityByDay,
+    patients: [],
+    records: [],
+    consents: [],
+    requests: [],
+    activeViewers: [],
+    expiringSoon: [],
+    recordsByType: [],
+    recentEvents: [],
+    displayNamesAvailable: false,
+  };
+}
+
+function isGlobalViewer(viewer) {
+  return viewer === null;
 }
 
 export async function stats(req, res) {
-  const redact = !req.viewer;
-  // One exit, so a new branch cannot forget to redact.
-  const send = (payload) => res.json(redact ? withoutLabels(payload) : payload);
+  // Null means a chain-confirmed admin or auditor. A Set is the exact set of
+  // patient addresses this viewer may see. Anonymous callers receive aggregates
+  // only, never clinical rows or off-chain names.
+  let entitled = new Set();
+  if (req.viewer) {
+    const { entitledPatients } = await import('../middleware/requireWallet.js');
+    entitled = await entitledPatients(req.viewer).catch(() => new Set());
+  }
+  const send = (payload) => res.json(scopeStats(payload, entitled, req.viewer));
   try {
     // A dashboard's refresh button should mean "read the chain again", not
     // "re-read the cache I just served". ?fresh=1 pays the six seconds on purpose.
     const wantsFresh = req.query?.fresh === '1' || req.query?.fresh === 'true';
     const facility = (req.query?.facility || '').trim();
 
-    // Scoped reads bypass the shared cache: the cache is the whole platform,
-    // and a hospital must never be served another facility's numbers from it.
+    // Explicit facility reads bypass the shared cache and must name a facility
+    // the proven viewer is allowed to inspect.
     if (facility) {
       try {
-        const { linkedPatientsOf } = await import('../lib/facilityScope.js');
-        const patients = (await linkedPatientsOf(facility)).map((p) => p.toLowerCase());
+        if (!req.viewer) {
+          return res.status(401).json({
+            error: 'ProofRequired',
+            message: 'A verified facility wallet is required for a scoped dashboard.',
+          });
+        }
+        if (!isGlobalViewer(entitled) && req.viewer.toLowerCase() !== facility.toLowerCase()) {
+          return res.status(403).json({
+            error: 'NotYourFacility',
+            message: 'A facility dashboard is available only to that facility or a platform auditor.',
+          });
+        }
+        if (!ethers.isAddress(facility)) {
+          return res.status(400).json({ error: 'BadRequest', message: 'Not a valid facility address.' });
+        }
+        const [isFacility] = await call('facilities', [facility]);
+        if (!isFacility) {
+          return res.status(404).json({ error: 'NotAFacility', message: 'That address is not a registered facility.' });
+        }
+        if (!isGlobalViewer(entitled)) {
+          const [hospitalRole] = await call('HOSPITAL_ROLE');
+          const [activeRole] = await call('hasRole', [hospitalRole, facility]);
+          if (!activeRole) {
+            return res.status(403).json({
+              error: 'FacilityRoleInactive',
+              message: 'The facility does not currently hold HOSPITAL_ROLE.',
+            });
+          }
+        }
+        const [linked] = await call('linkedPatients', [facility]);
         const payload = await computeStats();
         return send({
-          ...applyFacilityScope(payload, new Set(patients)),
+          ...scopeStats(
+            payload,
+            new Set((linked || []).map((p) => p.toLowerCase())),
+            facility
+          ),
           cached: false,
           stale: false,
           cacheAgeMs: 0,
@@ -174,23 +217,46 @@ export async function warmStats() {
   }
 }
 
-/**
- * Narrow a computed payload to one facility's read scope: records whose patient
- * is currently linked to it, and the consents, requests and patient rows that
- * belong to those records. Chain-wide activity counts stay global — they count
- * edges, not patients — and are marked as such rather than silently filtered.
- */
-function applyFacilityScope(payload, patients) {
-  const inScope = (address) => address && patients.has(String(address).toLowerCase());
-  const records = (payload.records || []).filter((r) => inScope(r.patient));
+/** Narrow off-chain dashboard rows to a viewer's current subject and consent scope. */
+function scopeStats(payload, patients, viewer) {
+  if (isGlobalViewer(patients)) return payload;
+  if (patients.size === 0) return publicStats(payload);
+
+  const inPatientScope = (address) =>
+    address && patients.has(String(address).toLowerCase());
+  const viewerAddress = String(viewer || '').toLowerCase();
+  const consentedTokens = new Set(
+    (payload.consents || [])
+      .filter((consent) =>
+        consent.active && String(consent.viewer || '').toLowerCase() === viewerAddress
+      )
+      .map((consent) => consent.tokenId)
+  );
+  // A clinician sees only a record for which the contract currently grants them
+  // access. Patients and facilities in the subject scope retain their broader
+  // dashboard view.
+  const records = (payload.records || []).filter(
+    (record) => inPatientScope(record.patient) || consentedTokens.has(record.tokenId)
+  );
   const tokenIds = new Set(records.map((r) => r.tokenId));
-  const consents = (payload.consents || []).filter((c) => tokenIds.has(c.tokenId));
-  const requests = (payload.requests || []).filter((r) => inScope(r.patient));
-  const scopedPatients = (payload.patients || []).filter((p) => inScope(p.address));
+  const recordPatients = new Set(records.map((r) => String(r.patient || '').toLowerCase()));
+  const consents = (payload.consents || []).filter(
+    (consent) =>
+      tokenIds.has(consent.tokenId) &&
+      (recordPatients.has(String(consent.patient || '').toLowerCase()) ||
+        String(consent.viewer || '').toLowerCase() === viewerAddress)
+  );
+  const scopedPatients = (payload.patients || []).filter(
+    (patient) => inPatientScope(patient.address) || recordPatients.has(String(patient.address || '').toLowerCase())
+  );
   const expiringSoon = (payload.expiringSoon || []).filter((c) => tokenIds.has(c.tokenId));
   const activeConsents = consents.filter((c) => c.active);
-  const activeViewers = (payload.activeViewers || []).filter((v) =>
-    consents.some((c) => String(c.viewer).toLowerCase() === String(v.address).toLowerCase())
+  const visibleViewerAddresses = new Set(consents.map((consent) => String(consent.viewer).toLowerCase()));
+  const activeViewers = (payload.activeViewers || []).filter((viewerRow) =>
+    visibleViewerAddresses.has(String(viewerRow.address).toLowerCase())
+  );
+  const scopedRequests = (payload.requests || []).filter(
+    (request) => inPatientScope(request.patient) || recordPatients.has(String(request.patient || '').toLowerCase())
   );
 
   const count = (list, key) => {
@@ -210,18 +276,19 @@ function applyFacilityScope(payload, patients) {
       activeConsents: activeConsents.length,
       expiringSoon: expiringSoon.length,
       distinctViewers: activeViewers.length,
-      requests: requests.length,
-      openRequests: requests.filter((request) => request.status === 'open').length,
+      requests: scopedRequests.length,
+      openRequests: scopedRequests.filter((request) => request.status === 'open').length,
       identities: scopedPatients.length,
+      expiredConsents: consents.filter((consent) => !consent.active).length,
     },
     patients: scopedPatients,
     records,
     consents,
-    requests,
+    requests: scopedRequests,
     expiringSoon,
     activeViewers,
     recordsByType: count(records, (r) => r.recordType || 'UNSPECIFIED'),
-    note: 'Scoped to one facility: records, consents, requests and patient rows for currently linked patients. Activity over time and events by type remain chain-wide.',
+    note: 'Patient and facility views follow current subject scope. Clinicians see only records with active consent. Activity over time and event counts are chain-wide.',
   };
 }
 

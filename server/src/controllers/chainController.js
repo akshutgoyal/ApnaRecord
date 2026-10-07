@@ -10,6 +10,7 @@ import {
   transactionSenders,
   labelMap,
 } from '../services/chain.js';
+import { entitledPatients } from '../middleware/requireWallet.js';
 
 /** GET /api/chain/status — proves the read-only RPC path is live. */
 export async function chainStatus(req, res) {
@@ -32,27 +33,20 @@ export async function chainStatus(req, res) {
 
 /** GET /api/chain/identities — rebuilt from IdentityCreated logs. */
 
-/** Names are the directory; counts are public. See statsController for the reasoning. */
-const LABEL_KEY = /^(label|.*Label)$/i;
-function withoutLabels(value) {
-  if (Array.isArray(value)) return value.map(withoutLabels);
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [key, inner] of Object.entries(value)) {
-      out[key] = LABEL_KEY.test(key) ? null : withoutLabels(inner);
-    }
-    return out;
-  }
-  return value;
-}
-
 export async function chainIdentities(req, res) {
   try {
     const list = await identities();
-    // The names are the directory. Counts and roles are chain-derived and public; the
-    // labels are off-chain, so they go only to a caller who proved a wallet.
+    const entitled = req.viewer
+      ? await entitledPatients(req.viewer).catch(() => new Set())
+      : new Set();
     return res.json({
-      identities: req.viewer ? list : withoutLabels(list),
+      identities: list.map((entry) => ({
+        ...entry,
+        label:
+          entitled === null || entitled.has(String(entry.account).toLowerCase())
+            ? entry.label
+            : null,
+      })),
       source: 'IdentityCreated logs + hasRole',
     });
   } catch (error) {
@@ -71,7 +65,14 @@ export async function chainPermissions(req, res) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }
   try {
-    return res.json(await permissions(address));
+    const result = await permissions(address);
+    const entitled = req.viewer
+      ? await entitledPatients(req.viewer).catch(() => new Set())
+      : new Set();
+    if (entitled !== null && !entitled.has(address.toLowerCase())) {
+      result.identity.label = null;
+    }
+    return res.json(result);
   } catch (error) {
     return res.status(502).json({ error: 'ChainUnavailable', message: error.message });
   }
@@ -210,6 +211,18 @@ export async function chainRecordHistory(req, res) {
     const record = await recordMeta(tokenId);
     if (!record) return res.status(404).json({ error: 'RecordNotFound', message: 'No such record.' });
 
+    const entitled = req.viewer
+      ? await entitledPatients(req.viewer).catch(() => new Set())
+      : new Set();
+    let maySeeOffChain =
+      entitled === null ||
+      Boolean(record.patient && entitled.has(String(record.patient).toLowerCase()));
+    if (!maySeeOffChain && req.viewer) {
+      maySeeOffChain = await call('canAccess', [tokenId, req.viewer])
+        .then((result) => Boolean(result?.[0]))
+        .catch(() => false);
+    }
+
     const TOKEN_EVENTS = [
       'RecordRequested',
       'RecordMinted',
@@ -240,7 +253,7 @@ export async function chainRecordHistory(req, res) {
       if (!TOKEN_EVENTS.includes(event.name)) return false;
       const args = event.args || {};
       if (args.tokenId !== undefined) return String(args.tokenId) === String(tokenId);
-      if (event.name === 'RecordRequested' && requestIdsForPatient) {
+      if (event.name === 'RecordRequested' && maySeeOffChain && requestIdsForPatient) {
         return requestIdsForPatient.has(String(args.requestId));
       }
       return false;
@@ -267,7 +280,8 @@ export async function chainRecordHistory(req, res) {
           logIndex: event.logIndex,
           timestamp: times[event.blockNumber] || null,
           actor,
-          actorLabel: actor ? labels[String(actor).toLowerCase()] || null : null,
+          actorLabel:
+            maySeeOffChain && actor ? labels[String(actor).toLowerCase()] || null : null,
           args,
         };
       })
@@ -278,7 +292,7 @@ export async function chainRecordHistory(req, res) {
       record: {
         tokenId: record.tokenId,
         patient: record.patient,
-        recordType: record.recordType,
+        ...(maySeeOffChain ? { recordType: record.recordType } : {}),
         recordHash: record.recordHash,
         mintedAtBlock: record.mintedAtBlock,
         mintedTx: record.mintedTx,
@@ -309,12 +323,11 @@ export async function audit(req, res) {
     return res.json({
       tokenId: record.tokenId,
       recordHash: record.recordHash,
-      recordType: record.recordType,
       patient: record.patient,
       mintedAtBlock: record.mintedAtBlock,
       mintedTx: record.mintedTx,
       locked: record.locked,
-      // Deliberately absent: cid, fileName, mimeType, and the bytes themselves.
+      // Deliberately absent: off-chain type, CID, file name, MIME type, and bytes.
       fileReleased: false,
       note: 'Metadata only. The contract does not release the file location to an auditor.',
     });

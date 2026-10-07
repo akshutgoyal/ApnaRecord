@@ -223,7 +223,8 @@ export const rotateRecovery = (address, payload) =>
   request(`/wallet/${address}/rotate-recovery`, { method: 'POST', body: JSON.stringify(payload) });
 
 export const chainIdentities = () => request('/chain/identities', { proof: true });
-export const chainPermissions = (address) => request(`/chain/permissions/${address}`);
+export const chainPermissions = (address) =>
+  request(`/chain/permissions/${address}`, { proof: true });
 
 /**
  * The event log, filtered server-side.
@@ -253,7 +254,8 @@ export const chainEvents = ({
 };
 
 /** Everything that ever happened to one record, oldest first. */
-export const recordHistory = (tokenId) => request(`/chain/records/${tokenId}/history`);
+export const recordHistory = (tokenId) =>
+  request(`/chain/records/${tokenId}/history`, { proof: true });
 
 // -------------------------------------------------------------- record index
 

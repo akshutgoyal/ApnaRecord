@@ -96,19 +96,17 @@ router.get('/wallet/:address', getWallet);
 // emptied is the one failure that looks like success.
 router.get('/dripper', requireWallet, dripperHealth);
 
-// Chain reads. No wallet, no consent, no account.
+// Chain facts are public. Routes that join off-chain directory data accept an
+// optional wallet proof and scope those fields before returning them.
 router.get('/chain/status', chainStatus);
-// Labels are off-chain. The chain knows a wallet holds a role; it does not know the
-// wallet is called "Patient 101". So this one needs a viewer, where the other chain
-// reads do not.
 router.get('/chain/identities', optionalWallet, chainIdentities);
-router.get('/chain/permissions/:address', chainPermissions);
+router.get('/chain/permissions/:address', optionalWallet, chainPermissions);
 router.get('/chain/events', chainEvents);
 // One record's own timeline — what a drill-down opens into.
-router.get('/chain/records/:tokenId/history', chainRecordHistory);
+router.get('/chain/records/:tokenId/history', optionalWallet, chainRecordHistory);
 
-// Dashboard aggregates, assembled from chain state.
-// Aggregates the dashboards read, including off-chain labels and the patient list.
+// Dashboard aggregates are public; off-chain rows are limited to the viewer's
+// current patient, facility, or active-consent scope.
 router.get('/stats', optionalWallet, stats);
 
 // Patient-owned display profiles. Off-chain convenience data: the chain records

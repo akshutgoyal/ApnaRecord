@@ -6,7 +6,7 @@ import {
   IdentityModel,
   isDbReady,
 } from '../models/index.js';
-import { call } from '../services/chain.js';
+import { call, permissions } from '../services/chain.js';
 
 // THE OFF-CHAIN DIRECTORY.
 //
@@ -335,6 +335,23 @@ export async function facilityDetail(req, res) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid facility address.' });
   }
   try {
+    const viewer = await permissions(req.viewer);
+    const sameFacilityStaff =
+      viewer.identity.active &&
+      String(viewer.identity.facility || '').toLowerCase() === it.toLowerCase() &&
+      (viewer.roles.manager || viewer.roles.hospital);
+    if (
+      req.viewer.toLowerCase() !== it.toLowerCase() &&
+      !viewer.roles.admin &&
+      !viewer.roles.auditor &&
+      !sameFacilityStaff
+    ) {
+      return res.status(403).json({
+        error: 'NotYourFacility',
+        message: 'This directory entry is available to the facility, its active staff, and platform auditors.',
+      });
+    }
+
     // `null` means "could not ask", which is NOT "not registered". Collapsing the two
     // reported a chain outage as a facility that does not exist — and the console then
     // offers to register it, which reverts, with nothing to explain why.
@@ -344,27 +361,36 @@ export async function facilityDetail(req, res) {
     } catch {
       onChain = null;
     }
-    
-    let directory = null;
-    let rows = [];
-    if (isDbReady()) {
-      directory = await FacilityModel.findOne({ it: it.toLowerCase() }).lean();
-      rows = await PatientLinkModel.find({ facility: it.toLowerCase(), state: 'linked' }).lean();
+
+    if (onChain) {
+      const [hospitalRole] = await call('HOSPITAL_ROLE');
+      const [activeRole] = await call('hasRole', [hospitalRole, it]);
+      if (!activeRole && !viewer.roles.admin && !viewer.roles.auditor) {
+        return res.status(403).json({
+          error: 'FacilityRoleInactive',
+          message: 'This facility no longer holds HOSPITAL_ROLE.',
+        });
+      }
     }
     
-    // The mirror says who the facility believes it treats; the chain says who it may
-    // actually read. They disagree for up to a minute after a link, a discharge or a
-    // revocation — and the chain is the one that decides whether a read succeeds.
+    let directory = null;
+    let consentTimes = new Map();
+    if (isDbReady()) {
+      directory = await FacilityModel.findOne({ it: it.toLowerCase() }).lean();
+      const rows = await PatientLinkModel.find({ facility: it.toLowerCase(), state: 'linked' }).lean();
+      consentTimes = new Map(rows.map((row) => [row.patient, row.consentedAt]));
+    }
+
+    // Read current relationships from the contract. The database supplies only
+    // optional timestamps; a stale mirror can never keep a discharged patient visible.
+    const [currentPatients] = await call('linkedPatients', [it]);
     const linkedPatients = [];
     let verifiedAgainstChain = true;
-    for (const row of rows) {
-      try {
-        const [stillLinked] = await call('facilityPatient', [it, row.patient]);
-        if (stillLinked) linkedPatients.push({ patient: row.patient, consentedAt: row.consentedAt });
-      } catch {
-        verifiedAgainstChain = false;
-        linkedPatients.push({ patient: row.patient, consentedAt: row.consentedAt });
-      }
+    for (const patient of currentPatients || []) {
+      linkedPatients.push({
+        patient,
+        consentedAt: consentTimes.get(patient.toLowerCase()) || null,
+      });
     }
     
     return res.json({

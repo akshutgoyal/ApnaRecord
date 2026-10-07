@@ -161,9 +161,15 @@ export async function getRecord(req, res) {
     // linked to them. Everyone else gets the on-chain half, which a block explorer would
     // show them anyway.
     const { mayReadSubject } = await import('../middleware/requireWallet.js');
-    const entitledToIt = req.viewer
+    const subjectEntitlement = req.viewer
       ? await mayReadSubject(req.viewer, meta.patient).catch(() => false)
       : false;
+    const consentEntitlement = req.viewer
+      ? await call('canAccess', [tokenId, req.viewer])
+          .then((result) => Boolean(result?.[0]))
+          .catch(() => false)
+      : false;
+    const entitledToIt = subjectEntitlement || consentEntitlement;
     
     if (entitledToIt) return res.json({ ...meta, cached: Boolean(cached) });
     

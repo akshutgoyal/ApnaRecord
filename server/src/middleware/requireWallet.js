@@ -95,7 +95,11 @@ export async function mayReadSubject(viewer, subject) {
 
   if (isAdmin) return true;
 
-  if (held?.isFacility) {
+  // Auditors can inspect metadata platform-wide, matching the scope used by
+  // entitledPatients() and the AUDITOR_ROLE contract gate.
+  if (held?.roles?.auditor) return true;
+
+  if (held?.isFacility && held.roles?.hospital) {
     const linked = await call('facilityPatient', [viewer, subject]).catch(() => null);
     if (linked?.[0]) return true;
   }
@@ -166,10 +170,12 @@ export async function entitledPatients(viewer) {
 
   const entitled = new Set([String(viewer).toLowerCase()]);
 
-  if (held?.isFacility) {
-    const { linkedPatientsOf } = await import('../lib/facilityScope.js');
-    const linked = await linkedPatientsOf(viewer).catch(() => []);
-    for (const patient of linked) entitled.add(String(patient).toLowerCase());
+  if (held?.isFacility && held.roles?.hospital) {
+    // Authorization follows the current contract state. The MongoDB link mirror
+    // is an index and can lag a discharge, so it must not decide whether clinical
+    // metadata is disclosed.
+    const [linked] = await call('linkedPatients', [viewer]);
+    for (const patient of linked || []) entitled.add(String(patient).toLowerCase());
   }
 
   return entitled;
