@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import { RecordModel, isDbReady } from '../models/index.js';
 import { recordMeta, tokensOf, call, verifyRecord } from '../services/chain.js';
 import { entitledPatients } from '../middleware/requireWallet.js';
-import { verifyStatement, recoverStatement } from '../lib/signature.js';
+import { verifyMessageForAddress } from '../lib/signature.js';
 import {
   putBlob,
   putSealedKey,
@@ -23,9 +23,10 @@ const MAX_BYTES = 20 * 1024 * 1024; // 20 MB of ciphertext per request
  * asserts they agree — drift here means every upload is refused and the failure looks
  * like a broken permissions system.
  */
-export function storeMessage(tokenId, patient, recordHash, timestamp) {
+export function storeMessage(tokenId, patient, recordHash, timestamp, actor = patient) {
   return (
     'ApnaRecord store record\n' +
+    `actor: ${ethers.getAddress(actor)}\n` +
     `tokenId: ${Number(tokenId)}\n` +
     `patient: ${ethers.getAddress(patient)}\n` +
     `recordHash: ${String(recordHash).toLowerCase()}\n` +
@@ -217,13 +218,14 @@ export async function listByOwner(req, res) {
  * Store a record the BROWSER already encrypted. The server receives ciphertext,
  * seals the content key, and never sees the plaintext at rest.
  *
- * Body: { tokenId, patient, recordType, fileName, mimeType, contentKey, ciphertext }
+ * Body: { actor, tokenId, patient, recordType, fileName, mimeType, contentKey, ciphertext }
  *       contentKey  — hex, 32 bytes, generated in the browser
  *       ciphertext  — base64 of `iv || ciphertext || tag`
  */
 export async function storeRecord(req, res) {
   try {
     const {
+      actor,
       tokenId,
       patient,
       recordType,
@@ -253,8 +255,14 @@ export async function storeRecord(req, res) {
     }
     // Validated before it is used to build a signed message, because getting this
     // wrong throws inside message construction and would surface as a 500.
+    if (!ethers.isAddress(actor)) {
+      return res.status(400).json({ error: 'BadRequest', message: 'actor must be a wallet or account address.' });
+    }
     if (!ethers.isAddress(patient)) {
       return res.status(400).json({ error: 'BadRequest', message: 'patient must be a wallet address.' });
+    }
+    if (!timestamp || !signature) {
+      return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement from the acting account is required.' });
     }
 
     const payload = Buffer.from(ciphertext, 'base64');
@@ -297,21 +305,27 @@ export async function storeRecord(req, res) {
       onChainOwner = null;
     }
 
-    const statement = storeMessage(Number(tokenId), patient, digest, timestamp);
+    const statement = storeMessage(Number(tokenId), patient, digest, timestamp, actor);
+    const authorization = await verifyMessageForAddress({
+      message: statement,
+      address: actor,
+      timestamp,
+      signature,
+    });
+    if (authorization.error) {
+      return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
+    }
 
     // The facility that staged these bytes, for the hospital read scope.
     // The platform mints anywhere and stamps nothing.
     let minterFacility = '';
 
     if (onChainOwner) {
-      const problem = verifyStatement({
-        message: statement,
-        address: onChainOwner,
-        timestamp,
-        signature,
-      });
-      if (problem) {
-        return res.status(403).json({ error: 'SignatureInvalid', message: problem });
+      if (actor.toLowerCase() !== onChainOwner.toLowerCase()) {
+        return res.status(403).json({
+          error: 'NotRecordOwner',
+          message: `Token ${tokenId} is owned by ${onChainOwner}; its owner account must authorize this upload.`,
+        });
       }
 
       if (onChainOwner.toLowerCase() !== String(patient).toLowerCase()) {
@@ -331,11 +345,6 @@ export async function storeRecord(req, res) {
         });
       }
     } else {
-      const recovered = recoverStatement({ message: statement, timestamp, signature });
-      if (recovered.error) {
-        return res.status(403).json({ error: 'SignatureInvalid', message: recovered.error });
-      }
-
       const [nextId] = await call('nextTokenId');
       if (Number(tokenId) !== Number(nextId)) {
         return res.status(400).json({
@@ -345,17 +354,17 @@ export async function storeRecord(req, res) {
       }
 
       const [adminRole] = await call('DEFAULT_ADMIN_ROLE');
-      const [isAdmin] = await call('hasRole', [adminRole, recovered.signer]);
+      const [isAdmin] = await call('hasRole', [adminRole, actor]);
       if (!isAdmin) {
         // A hospital may stage bytes for a patient it is currently linked to —
         // the same gate as `mintRecord` on-chain, re-checked here so a row
         // cannot be parked for a mint the chain would refuse.
         const [hospitalRole] = await call('HOSPITAL_ROLE');
-        const [isHospital] = await call('hasRole', [hospitalRole, recovered.signer]);
+        const [isHospital] = await call('hasRole', [hospitalRole, actor]);
         let linked = false;
         if (isHospital) {
           try {
-            const [flag] = await call('facilityPatient', [recovered.signer, patient]);
+            const [flag] = await call('facilityPatient', [actor, patient]);
             linked = Boolean(flag);
           } catch {
             linked = false;
@@ -369,7 +378,7 @@ export async function storeRecord(req, res) {
               'it — the platform, or a hospital currently linked to this patient.',
           });
         }
-        minterFacility = recovered.signer.toLowerCase();
+        minterFacility = actor.toLowerCase();
       }
     }
 

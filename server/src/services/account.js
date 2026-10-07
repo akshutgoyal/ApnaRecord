@@ -55,6 +55,10 @@ function loadArtifact() {
 export const ACCOUNT_READ_ABI = ['function owner() view returns (address)'];
 
 const readInterface = new ethers.Interface(ACCOUNT_READ_ABI);
+const signatureInterface = new ethers.Interface([
+  'function isValidSignature(bytes32 digest, bytes signature) view returns (bytes4)',
+]);
+const EIP1271_MAGIC_VALUE = '0x1626ba7e';
 
 /**
  * Deploy an account owned by `owner`, able to call only `allowedTargets`.
@@ -102,5 +106,31 @@ export async function accountOwner(address) {
   } catch {
     // No such function, or no code at the address. Either way it is not an account.
     return null;
+  }
+}
+
+/**
+ * Check a digest against an EOA or an EIP-1271 account.
+ *
+ * The client signs with the account owner's EOA, while ApnaRecord authorizes the
+ * account contract. Recovering an EOA is sufficient for direct wallets; for a
+ * contract identity, ask that contract to validate the same digest and signature.
+ */
+export async function signatureMatchesAddress(address, digest, signature) {
+  if (!ethers.isAddress(address) || !ethers.isHexString(digest, 32)) return false;
+
+  try {
+    if (ethers.recoverAddress(digest, signature).toLowerCase() === address.toLowerCase()) return true;
+  } catch {
+    // A contract wallet may accept signature formats that cannot recover one EOA.
+  }
+
+  try {
+    const data = signatureInterface.encodeFunctionData('isValidSignature', [digest, signature]);
+    const result = await getProvider().call({ to: ethers.getAddress(address), data });
+    const [magic] = signatureInterface.decodeFunctionResult('isValidSignature', result);
+    return magic.toLowerCase() === EIP1271_MAGIC_VALUE;
+  } catch {
+    return false;
   }
 }

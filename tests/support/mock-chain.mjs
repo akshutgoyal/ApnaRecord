@@ -9,7 +9,7 @@
 // bug that reads exactly like a product bug.
 
 import http from 'node:http';
-import { Transaction, formatEther, parseEther, Interface, id, getCreateAddress } from 'ethers';
+import { Transaction, formatEther, parseEther, Interface, id, getCreateAddress, recoverAddress } from 'ethers';
 
 const PORT = Number(process.env.MOCK_PORT) || 8545;
 const DRIPPER = (process.env.MOCK_DRIPPER || '').toLowerCase();
@@ -24,6 +24,7 @@ const READS = new Interface([
   'function ownerOf(uint256) view returns (address)',
   'function balanceOf(address) view returns (uint256)',
   'function owner() view returns (address)',
+  'function isValidSignature(bytes32,bytes) view returns (bytes4)',
   'function nextTokenId() view returns (uint256)',
   'function hasRole(bytes32,address) view returns (bool)',
   'function verifyRecord(uint256,bytes32) view returns (bool)',
@@ -47,6 +48,7 @@ const recordCounts = new Map();
 // because the real answer lives in the deployed contract's immutable storage and this
 // stub deliberately does not parse deployment calldata to find it.
 const accountOwners = new Map();
+const roleAssignments = new Map();
 
 const balances = new Map();
 const nonces = new Map();
@@ -76,6 +78,11 @@ function handle(message) {
     case 'mock_setAccountOwner': {
       const [account, owner] = message.params || [];
       accountOwners.set(String(account).toLowerCase(), String(owner).toLowerCase());
+      return true;
+    }
+    case 'mock_setRole': {
+      const [role, account, held] = message.params || [];
+      roleAssignments.set(`${String(role).toLowerCase()}:${at(account)}`, Boolean(held));
       return true;
     }
     case 'eth_chainId':
@@ -142,7 +149,12 @@ function handle(message) {
         return READS.encodeFunctionResult('nextTokenId', [BigInt(process.env.MOCK_NEXT_TOKEN_ID || 1)]);
       }
       if (which === selector('hasRole')) {
-        return READS.encodeFunctionResult('hasRole', [process.env.MOCK_IS_ADMIN === 'true']);
+        const [role, account] = READS.decodeFunctionData('hasRole', data);
+        const assigned = roleAssignments.get(`${String(role).toLowerCase()}:${at(account)}`);
+        return READS.encodeFunctionResult(
+          'hasRole',
+          [assigned ?? (process.env.MOCK_IS_ADMIN === 'true')]
+        );
       }
       if (which === selector('verifyRecord')) {
         return READS.encodeFunctionResult('verifyRecord', [process.env.MOCK_VERIFY_RECORD !== 'false']);
@@ -178,6 +190,19 @@ function handle(message) {
         return READS.encodeFunctionResult('owner', [
           accountOwners.get(String(call.to).toLowerCase()) || `0x${'00'.repeat(20)}`,
         ]);
+      }
+      if (which === selector('isValidSignature')) {
+        const [digest, signature] = READS.decodeFunctionData('isValidSignature', data);
+        const owner = accountOwners.get(String(call.to).toLowerCase());
+        let valid = false;
+        if (owner) {
+          try {
+            valid = recoverAddress(digest, signature).toLowerCase() === owner;
+          } catch {
+            valid = false;
+          }
+        }
+        return READS.encodeFunctionResult('isValidSignature', [valid ? '0x1626ba7e' : '0xffffffff']);
       }
       // Unknown call. Zeros of the right shape rather than a bare `0x`, so a read the
       // server does not expect still decodes instead of throwing.

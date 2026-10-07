@@ -4,24 +4,27 @@
 // Requires the API pointed at the mock chain, with a funded dripper.
 
 import fs from 'node:fs';
-import { Wallet } from 'ethers';
+import { Wallet, getAddress, hexlify, id, randomBytes } from 'ethers';
 import {
   createWallet,
   sealPrivateKey,
   generateRecoveryCode,
   openPrivateKey,
 } from '../../client/src/lib/keystore.js';
-import { enrolMessage, rotateRecoveryMessage } from '../../client/src/lib/wireMessages.js';
+import { enrolMessage, requestMessage, rotateRecoveryMessage } from '../../client/src/lib/wireMessages.js';
 import { storeMessage } from '../../client/src/lib/wireMessages.js';
 import {
   enrolMessage as serverEnrolMessage,
   rotateRecoveryMessage as serverRotateMessage,
 } from '../../server/src/controllers/walletController.js';
 import { storeMessage as serverStoreMessage } from '../../server/src/controllers/recordController.js';
+import { profileMessage as serverProfileMessage } from '../../server/src/controllers/profileController.js';
+import { READ_DOMAIN, READ_TYPES } from '../../server/src/lib/readProof.js';
 import { check, group, report, proofHeaders } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
 const MOCK_LOG = process.env.MOCK_LOG || '/tmp/mock-chain.log';
+const CHAIN = process.env.CHAIN || 'http://127.0.0.1:8545';
 
 
 async function post(path, body) {
@@ -34,6 +37,34 @@ async function post(path, body) {
 }
 // Reads now carry a proof: most of these endpoints return off-chain rows.
 const get = async (path) => (await fetch(`${API}${path}`, { headers: await proofHeaders() })).json();
+
+async function setMockAccountOwner(account, owner) {
+  const response = await fetch(CHAIN, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'mock_setAccountOwner',
+      params: [account, owner],
+    }),
+  });
+  return response.ok;
+}
+
+async function setMockRole(role, account, held) {
+  const response = await fetch(CHAIN, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'mock_setRole',
+      params: [role, account, held],
+    }),
+  });
+  return response.ok;
+}
 
 const unique = () => `w${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,16 +143,18 @@ check(
 const probeDigest = `0x${'ab'.repeat(32)}`;
 check(
   'the client and server agree on the store message byte for byte',
-  storeMessage(7, probe, probeDigest, 1234567890) === serverStoreMessage(7, probe, probeDigest, 1234567890),
-  storeMessage(7, probe, probeDigest, 1234567890)
+  storeMessage(7, probe, probeDigest, 1234567890, probe) === serverStoreMessage(7, probe, probeDigest, 1234567890, probe),
+  storeMessage(7, probe, probeDigest, 1234567890, probe)
 );
 check(
   'the store message lowercases the digest, so a checksum case cannot break it',
-  storeMessage(7, probe, `0x${'AB'.repeat(32)}`, 1) === storeMessage(7, probe, `0x${'ab'.repeat(32)}`, 1)
+  storeMessage(7, probe, `0x${'AB'.repeat(32)}`, 1, probe) ===
+    storeMessage(7, probe, `0x${'ab'.repeat(32)}`, 1, probe)
 );
 check(
-  'the store message binds the token id, the patient and the digest',
-  storeMessage(7, probe, probeDigest, 1) !== storeMessage(8, probe, probeDigest, 1) &&
+  'the store message binds actor, token id, patient and digest',
+  storeMessage(7, probe, probeDigest, 1, probe) !== storeMessage(7, probe, probeDigest, 1, '0x0000000000000000000000000000000000000002') &&
+    storeMessage(7, probe, probeDigest, 1, probe) !== storeMessage(8, probe, probeDigest, 1, probe) &&
     storeMessage(7, probe, probeDigest, 1) !==
       storeMessage(7, '0x0000000000000000000000000000000000000002', probeDigest, 1) &&
     storeMessage(7, probe, probeDigest, 1) !== storeMessage(7, probe, `0x${'cd'.repeat(32)}`, 1)
@@ -154,6 +187,79 @@ check(
 check('the blob does not contain the private key', !fetched.enrolment.sealed.includes(first.privateKey.slice(2)));
 check('the identity comes back as a masked address', /^w•••@example\.com$/.test(fetched.enrolment.emailMasked || ''), fetched.enrolment.emailMasked);
 check('the raw address is not stored, only the mask', !JSON.stringify(fetched.enrolment).includes(first.email));
+
+group('account identity across API reads and writes');
+const profileOwner = Wallet.createRandom();
+const profileAccount = Wallet.createRandom().address;
+check('the stub account owner is set', await setMockAccountOwner(profileAccount, profileOwner.address));
+const issuedAt = Date.now();
+const nonce = hexlify(randomBytes(32));
+const readSignature = await profileOwner.signTypedData(READ_DOMAIN(), READ_TYPES, {
+  tokenId: 0,
+  viewer: getAddress(profileAccount),
+  issuedAt,
+  nonce,
+});
+const session = await post('/auth/session', {
+  viewer: profileAccount,
+  issuedAt,
+  nonce,
+  signature: readSignature,
+});
+check(
+  'an account-owner signature creates a session for the account identity',
+  session.status === 200 && session.body.viewer === getAddress(profileAccount),
+  `${session.status} ${session.body.viewer || session.body.error}`
+);
+
+const profileTimestamp = Date.now();
+const profileSignature = await profileOwner.signMessage(
+  serverProfileMessage(profileAccount, profileTimestamp)
+);
+const profileSave = await post(`/profiles/${profileAccount}`, {
+  displayName: 'Account Owner',
+  timestamp: profileTimestamp,
+  signature: profileSignature,
+});
+check(
+  'an EIP-1271 account signature authorizes its profile write',
+  profileSave.status === 200 && profileSave.body.profile?.displayName === 'Account Owner',
+  `${profileSave.status} ${profileSave.body.error || ''}`
+);
+
+const profileReadResponse = await fetch(`${API}/profiles/${profileAccount}`, {
+  headers: { Authorization: `Bearer ${session.body.token}` },
+});
+const profileRead = await profileReadResponse.json().catch(() => ({}));
+check(
+  'the account session reads its own profile as the subject',
+  profileReadResponse.status === 200 && profileRead.profile?.displayName === 'Account Owner',
+  `${profileReadResponse.status} ${profileRead.error || ''}`
+);
+
+const requestId = Date.now();
+const requestPatient = Wallet.createRandom().address;
+const requestTimestamp = Date.now();
+const requestSignature = await profileOwner.signMessage(
+  requestMessage(requestId, requestPatient, 'MRI_SCAN', requestTimestamp, profileAccount)
+);
+check(
+  'the account receives the manager role in the stub',
+  await setMockRole(id('MANAGER_ROLE'), profileAccount, true)
+);
+const savedRequest = await post('/requests', {
+  actor: profileAccount,
+  requestId,
+  patient: requestPatient,
+  recordType: 'MRI_SCAN',
+  timestamp: requestTimestamp,
+  signature: requestSignature,
+});
+check(
+  'an account signature authorizes the acting account role check',
+  savedRequest.status === 201 && savedRequest.body.request?.requester === profileAccount.toLowerCase(),
+  `${savedRequest.status} ${savedRequest.body.error || ''}`
+);
 
 group('what enrolment refuses');
 const badSig = await post(

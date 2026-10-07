@@ -32,6 +32,7 @@ function check(name, condition, detail = '') {
 
 const account = '0x194eFBB518Eb356Edb18B7088a7F13629b241348';
 const facility = '0xc089766ad7B4E2835f1955D7f7122242CdDA978C';
+const actor = '0x0000000000000000000000000000000000000003';
 
 console.log('\nidentityMessage');
 check(
@@ -44,6 +45,13 @@ check(
     serverIdentity(account, 'Doctor 101', facility, 456)
 );
 check(
+  'binds the acting account separately from the identity being recorded',
+  clientIdentity(account, 'Doctor 101', facility, 456, actor) ===
+    serverIdentity(account, 'Doctor 101', facility, 456, actor) &&
+    clientIdentity(account, 'Doctor 101', facility, 456, actor) !==
+      clientIdentity(account, 'Doctor 101', facility, 456, account)
+);
+check(
   'trims the label the same way',
   clientIdentity(account, '  x  ', '', 1) === serverIdentity(account, '  x  ', '', 1)
 );
@@ -53,11 +61,19 @@ check(
   'agrees',
   clientFacility(facility, 'City Care', 789) === serverFacility(facility, 'City Care', 789)
 );
+check(
+  'binds a distinct acting account',
+  clientFacility(facility, 'City Care', 789, actor) === serverFacility(facility, 'City Care', 789, actor)
+);
 
 console.log('\nrequestMessage');
 check(
   'agrees',
   clientRequest(7, account, 'MRI_SCAN', 101112) === serverRequest(7, account, 'MRI_SCAN', 101112)
+);
+check(
+  'binds a distinct acting account',
+  clientRequest(7, account, 'MRI_SCAN', 101112, actor) === serverRequest(7, account, 'MRI_SCAN', 101112, actor)
 );
 check(
   'lowercase hash input matches either way',

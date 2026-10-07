@@ -41,6 +41,7 @@ const now = () => Date.now();
 
 group('POST /identities refuses what it must');
 const unsigned = await post('/identities', {
+  actor: patient.address,
   account: patient.address,
   label: 'Patient 101',
   facility: '',
@@ -50,6 +51,7 @@ check('an unsigned write is refused', unsigned.status === 400, `got ${unsigned.s
 check('and names the missing signature', unsigned.body.error === 'SignatureRequired', unsigned.body.error);
 
 const malformed = await post('/identities', {
+  actor: stranger.address,
   account: 'not-an-address',
   label: 'x',
   facility: '',
@@ -60,9 +62,10 @@ check('a malformed account is refused', malformed.status === 400, `got ${malform
 
 const strangerTime = now();
 const strangerSig = await stranger.signMessage(
-  identityMessage(patient.address, 'Patient 101', '', strangerTime)
+  identityMessage(patient.address, 'Patient 101', '', strangerTime, stranger.address)
 );
 const unauthorised = await post('/identities', {
+  actor: stranger.address,
   account: patient.address,
   label: 'Patient 101',
   facility: '',
@@ -78,9 +81,10 @@ check(
 group('POST /facilities refuses what it must');
 const facilityTime = now();
 const facilitySig = await stranger.signMessage(
-  facilityMessage(facility.address, 'City Care', facilityTime)
+  facilityMessage(facility.address, 'City Care', facilityTime, stranger.address)
 );
 const facilityDenied = await post('/facilities', {
+  actor: stranger.address,
   it: facility.address,
   name: 'City Care',
   timestamp: facilityTime,
@@ -93,6 +97,7 @@ check(
 );
 
 const nameless = await post('/facilities', {
+  actor: stranger.address,
   it: facility.address,
   name: '  ',
   timestamp: now(),
@@ -102,8 +107,11 @@ check('a missing name is refused before any signature check', nameless.status ==
 
 group('POST /requests refuses what it must');
 const requestTime = now();
-const requestSig = await stranger.signMessage(requestMessage(999999, patient.address, 'MRI_SCAN', requestTime));
+const requestSig = await stranger.signMessage(
+  requestMessage(999999, patient.address, 'MRI_SCAN', requestTime, stranger.address)
+);
 const requestDenied = await post('/requests', {
+  actor: stranger.address,
   requestId: 999999,
   patient: patient.address,
   recordType: 'MRI_SCAN',

@@ -7,6 +7,7 @@ import {
   isDbReady,
 } from '../models/index.js';
 import { call, permissions } from '../services/chain.js';
+import { verifyMessageForAddress } from '../lib/signature.js';
 
 // THE OFF-CHAIN DIRECTORY.
 //
@@ -20,18 +21,17 @@ import { call, permissions } from '../services/chain.js';
 // createFacility, requestRecord). The server does not re-decide what the chain
 // decided; it records the part the chain refused to carry.
 
-const MAX_AGE_MS = 5 * 60 * 1000;
-
 /**
  * Must stay byte-identical to `identityMessage` in `client/src/lib/wireMessages.js`.
  * The two deploy separately so it is duplicated rather than imported, and the
  * test suite asserts they agree.
  */
-export function identityMessage(account, label, facility, timestamp) {
+export function identityMessage(account, label, facility, timestamp, actor = account) {
   const facilityPart =
     facility && String(facility).trim() !== '' ? ethers.getAddress(facility) : '';
   return (
     'ApnaRecord register identity\n' +
+    `actor: ${ethers.getAddress(actor)}\n` +
     `account: ${ethers.getAddress(account)}\n` +
     `label: ${String(label || '').slice(0, 80)}\n` +
     `facility: ${facilityPart}\n` +
@@ -42,9 +42,10 @@ export function identityMessage(account, label, facility, timestamp) {
 /**
  * Must stay byte-identical to `facilityMessage` in `client/src/lib/wireMessages.js`.
  */
-export function facilityMessage(it, name, timestamp) {
+export function facilityMessage(it, name, timestamp, actor = it) {
   return (
     'ApnaRecord register facility\n' +
+    `actor: ${ethers.getAddress(actor)}\n` +
     `it: ${ethers.getAddress(it)}\n` +
     `name: ${String(name || '').slice(0, 120)}\n` +
     `timestamp: ${timestamp}`
@@ -54,9 +55,10 @@ export function facilityMessage(it, name, timestamp) {
 /**
  * Must stay byte-identical to `requestMessage` in `client/src/lib/wireMessages.js`.
  */
-export function requestMessage(requestId, patient, recordType, timestamp) {
+export function requestMessage(requestId, patient, recordType, timestamp, actor = patient) {
   return (
     'ApnaRecord record request\n' +
+    `actor: ${ethers.getAddress(actor)}\n` +
     `requestId: ${Number(requestId)}\n` +
     `patient: ${ethers.getAddress(patient)}\n` +
     `recordType: ${String(recordType || '').slice(0, 60)}\n` +
@@ -134,17 +136,20 @@ export function requestWriteVerdict({ existing, requester }) {
 
 /**
  * POST /api/identities
- * Body: { account, label, facility, timestamp, signature }
+ * Body: { actor, account, label, facility, timestamp, signature }
  *
- * Records the label the chain refused to carry. The signer must be the platform
- * admin (any placement) or a hospital IT wallet placing its own staff or its own
+ * Records the label the chain refused to carry. The actor account must be the platform
+ * admin (any placement) or a hospital account placing its own staff or its own
  * patients — the same rule as `createIdentity` on-chain, re-checked here so a
  * row cannot claim a placement the chain would refuse.
  */
 export async function recordIdentity(req, res) {
   if (requireDb(res)) return;
-  const { account, label, facility, timestamp, signature } = req.body || {};
+  const { actor, account, label, facility, timestamp, signature } = req.body || {};
 
+  if (!ethers.isAddress(actor)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid acting account address.' });
+  }
   if (!ethers.isAddress(account)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid account address.' });
   }
@@ -157,39 +162,34 @@ export async function recordIdentity(req, res) {
     return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement is required.' });
   }
 
-  const age = Date.now() - Number(timestamp);
-  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
-    return res.status(403).json({ error: 'SignatureInvalid', message: 'The signature is stale. Refresh and try again.' });
-  }
-
-  let signer;
-  try {
-    signer = ethers.verifyMessage(identityMessage(account, label || '', facilityAddr, timestamp), signature);
-  } catch {
-    return res.status(403).json({ error: 'SignatureInvalid', message: 'That signature could not be read.' });
+  const authorization = await verifyMessageForAddress({
+    message: identityMessage(account, label || '', facilityAddr, timestamp, actor),
+    address: actor,
+    timestamp,
+    signature,
+  });
+  if (authorization.error) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
   }
 
   try {
-    const admin = await isAdmin(signer);
+    const admin = await isAdmin(actor);
     if (!admin) {
-      const facilityWallet = await isFacility(signer);
+      const facilityWallet = await isFacility(actor);
       if (!facilityWallet) {
-        // Naming the address is the whole point. This refusal is decided from the
-        // SIGNER the signature recovers to, which is not necessarily the account the
-        // app has on screen — a wallet holding several accounts can sign with a
-        // different one than the header shows. Without the address the message reads
-        // as "you are not allowed", when the truth is usually "that was not you".
         return res.status(403).json({
           error: 'NotAuthorized',
-          signer,
-          message: `${signer} is neither the platform nor a hospital IT wallet, so it cannot register identities. If that is not the account you expected, your wallet signed with a different one.`,
+          actor,
+          signer: authorization.signer,
+          message: `${actor} is neither the platform nor a hospital IT account, so it cannot register identities.`,
         });
       }
-      if (facilityAddr && facilityAddr.toLowerCase() !== signer.toLowerCase()) {
+      if (facilityAddr && facilityAddr.toLowerCase() !== actor.toLowerCase()) {
         return res.status(403).json({
           error: 'NotAuthorized',
-          signer,
-          message: `${signer} may only place identities in its own facility, and this one names ${facilityAddr}.`,
+          actor,
+          signer: authorization.signer,
+          message: `${actor} may only place identities in its own facility, and this one names ${facilityAddr}.`,
         });
       }
     }
@@ -221,12 +221,15 @@ export async function recordIdentity(req, res) {
 
 /**
  * POST /api/facilities
- * Body: { it, name, timestamp, signature } — signed by the platform admin.
+ * Body: { actor, it, name, timestamp, signature } — signed by the platform admin.
  */
 export async function recordFacility(req, res) {
   if (requireDb(res)) return;
-  const { it, name, timestamp, signature } = req.body || {};
+  const { actor, it, name, timestamp, signature } = req.body || {};
 
+  if (!ethers.isAddress(actor)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid acting account address.' });
+  }
   if (!ethers.isAddress(it)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid facility address.' });
   }
@@ -237,19 +240,18 @@ export async function recordFacility(req, res) {
     return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement is required.' });
   }
 
-  let signer;
-  try {
-    signer = ethers.verifyMessage(facilityMessage(it, String(name).slice(0, 120), timestamp), signature);
-  } catch {
-    return res.status(403).json({ error: 'SignatureInvalid', message: 'That signature could not be read.' });
-  }
-  const age = Date.now() - Number(timestamp);
-  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
-    return res.status(403).json({ error: 'SignatureInvalid', message: 'The signature is stale. Refresh and try again.' });
+  const authorization = await verifyMessageForAddress({
+    message: facilityMessage(it, String(name).slice(0, 120), timestamp, actor),
+    address: actor,
+    timestamp,
+    signature,
+  });
+  if (authorization.error) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
   }
 
   try {
-    if (!(await isAdmin(signer))) {
+    if (!(await isAdmin(actor))) {
       return res.status(403).json({ error: 'NotAuthorized', message: 'Only the platform may register facilities.' });
     }
     const row = await FacilityModel.findOneAndUpdate(
@@ -265,16 +267,19 @@ export async function recordFacility(req, res) {
 
 /**
  * POST /api/requests
- * Body: { requestId, patient, recordType, timestamp, signature } — signed by the
+ * Body: { actor, requestId, patient, recordType, timestamp, signature } — signed by the
  * requesting clinician. Anchors the contents of a `RecordRequested` event the
  * chain carries only as an id.
  */
 export async function recordRequest(req, res) {
   if (requireDb(res)) return;
-  const { requestId, patient, recordType, timestamp, signature } = req.body || {};
+  const { actor, requestId, patient, recordType, timestamp, signature } = req.body || {};
 
   if (!Number.isInteger(Number(requestId)) || Number(requestId) <= 0) {
     return res.status(400).json({ error: 'BadRequest', message: 'requestId must be a positive integer.' });
+  }
+  if (!ethers.isAddress(actor)) {
+    return res.status(400).json({ error: 'BadRequest', message: 'Not a valid acting account address.' });
   }
   if (!ethers.isAddress(patient)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid patient address.' });
@@ -283,30 +288,26 @@ export async function recordRequest(req, res) {
     return res.status(400).json({ error: 'SignatureRequired', message: 'A signed statement is required.' });
   }
 
-  let signer;
-  try {
-    signer = ethers.verifyMessage(
-      requestMessage(Number(requestId), patient, String(recordType || ''), timestamp),
-      signature
-    );
-  } catch {
-    return res.status(403).json({ error: 'SignatureInvalid', message: 'That signature could not be read.' });
-  }
-  const age = Date.now() - Number(timestamp);
-  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
-    return res.status(403).json({ error: 'SignatureInvalid', message: 'The signature is stale. Refresh and try again.' });
+  const authorization = await verifyMessageForAddress({
+    message: requestMessage(Number(requestId), patient, String(recordType || ''), timestamp, actor),
+    address: actor,
+    timestamp,
+    signature,
+  });
+  if (authorization.error) {
+    return res.status(403).json({ error: 'SignatureInvalid', message: authorization.error });
   }
 
   try {
     const [managerRole] = await call('MANAGER_ROLE');
-    const [holds] = await call('hasRole', [managerRole, signer]);
+    const [holds] = await call('hasRole', [managerRole, actor]);
     if (!holds) {
       return res.status(403).json({ error: 'NotAuthorized', message: 'Only a clinician holding MANAGER_ROLE may file requests.' });
     }
 
     const verdict = requestWriteVerdict({
       existing: await RequestModel.findOne({ requestId: Number(requestId) }).lean(),
-      requester: signer.toLowerCase(),
+      requester: actor.toLowerCase(),
     });
     if (verdict) {
       return res.status(verdict.status).json({ error: verdict.error, message: verdict.message });
@@ -316,7 +317,7 @@ export async function recordRequest(req, res) {
       { requestId: Number(requestId) },
       {
         requestId: Number(requestId),
-        requester: signer.toLowerCase(),
+        requester: actor.toLowerCase(),
         patient: patient.toLowerCase(),
         recordType: String(recordType || '').slice(0, 60),
       },

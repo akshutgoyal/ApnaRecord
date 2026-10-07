@@ -1,13 +1,12 @@
 import { ethers } from 'ethers';
 import { ProfileModel, isDbReady } from '../models/index.js';
+import { verifyMessageForAddress } from '../lib/signature.js';
 
 // Patient-owned display profiles.
 //
-// Authorisation is a SIGNATURE, not a session. There is no login, so there is
-// nothing to log into — the wallet signs a statement, the server recovers the
-// signer, and only that signer may write their own row. This also means nobody
-// can rename somebody else's records, which is the obvious attack on a display
-// directory.
+// Authorisation is a SIGNATURE, not a session. An EOA proves itself by recovery;
+// an account contract validates its owner's signature through EIP-1271. In both
+// cases the address being changed must authorize the exact profile message.
 //
 // A forged profile is worthless: change every name in this collection and
 // ownership, consent and verification are all unaffected. The chain decides those.
@@ -27,21 +26,15 @@ export function profileMessage(address, timestamp) {
  * Recover the signer and confirm it is the address being written to.
  * Returns null when valid, or a reason string when not.
  */
-function verifySignature(address, timestamp, signature) {
-  const age = Date.now() - Number(timestamp);
-  if (!Number.isFinite(age) || Math.abs(age) > MAX_AGE_MS) {
-    return 'The signature is stale. Refresh the page and try again.';
-  }
-  let recovered;
-  try {
-    recovered = ethers.verifyMessage(profileMessage(address, timestamp), signature);
-  } catch {
-    return 'That signature could not be read.';
-  }
-  if (recovered.toLowerCase() !== address.toLowerCase()) {
-    return `That signature was made by ${recovered}, not by the address being changed.`;
-  }
-  return null;
+async function verifySignature(address, timestamp, signature) {
+  const result = await verifyMessageForAddress({
+    message: profileMessage(address, timestamp),
+    address,
+    timestamp,
+    signature,
+    maxAgeMs: MAX_AGE_MS,
+  });
+  return result.error || null;
 }
 
 function requireDb(res) {
@@ -130,7 +123,7 @@ export async function upsertProfile(req, res) {
     });
   }
 
-  const problem = verifySignature(address, timestamp, signature);
+  const problem = await verifySignature(address, timestamp, signature);
   if (problem) {
     return res.status(403).json({ error: 'SignatureInvalid', message: problem });
   }
@@ -181,7 +174,7 @@ export async function deleteProfile(req, res) {
   if (!ethers.isAddress(address)) {
     return res.status(400).json({ error: 'BadRequest', message: 'Not a valid address.' });
   }
-  const problem = verifySignature(address, timestamp, signature);
+  const problem = await verifySignature(address, timestamp, signature);
   if (problem) return res.status(403).json({ error: 'SignatureInvalid', message: problem });
 
   try {

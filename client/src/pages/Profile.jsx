@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { getAddress } from 'ethers';
 import { useChain, describeError } from '../chain';
 import { getProfile, saveProfile, eraseProfile } from '../services/api';
 import { Card, Callout, Field, Pill, Busy } from '../components/ui';
@@ -10,7 +11,7 @@ import { OffChainBadge } from '../components/viz/primitives';
  * Must stay byte-for-byte in step with profileMessage() in the backend.
  */
 function profileMessage(address, timestamp) {
-  return 'ApnaRecord profile update\n' + `address: ${address}\n` + `timestamp: ${timestamp}`;
+  return 'ApnaRecord profile update\n' + `address: ${getAddress(address)}\n` + `timestamp: ${timestamp}`;
 }
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];

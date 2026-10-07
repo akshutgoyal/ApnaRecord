@@ -11,8 +11,9 @@
 //
 // So a read now requires a signature the caller must produce, over a structured
 // message that binds three things: which record, which viewer, and when. The
-// server recovers the signer and requires it to be the viewer — and only then
-// asks the contract. The contract still decides; this decides *who is asking*.
+// server validates an EOA directly or asks an account contract to attest through
+// EIP-1271 — and only then asks the record contract. The record contract still
+// decides access; this establishes *who is asking*.
 //
 // A note on why the message is structured (EIP-712) rather than a plain string.
 // The user sees what they are authorising in their wallet, the fields are typed,
@@ -21,7 +22,7 @@
 
 import { ethers } from 'ethers';
 import { claimOnce } from './rateLimit.js';
-import { accountOwner } from '../services/account.js';
+import { signatureMatchesAddress } from '../services/account.js';
 
 /** How long a signed read stays valid. Short, because it is a bearer token. */
 const MAX_AGE_MS = 5 * 60 * 1000;
@@ -110,45 +111,33 @@ export async function verifyReadProof({ tokenId, viewer, issuedAt, nonce, signat
     return 'A valid viewer address is required before a signature can be checked.';
   }
 
+  const value = {
+    tokenId,
+    viewer: ethers.getAddress(viewer),
+    issuedAt: Number(issuedAt),
+    nonce,
+  };
   let recovered;
   try {
-    recovered = ethers.verifyTypedData(
-      READ_DOMAIN(),
-      READ_TYPES,
-      { tokenId, viewer: ethers.getAddress(viewer), issuedAt: Number(issuedAt), nonce },
-      signature
-    );
+    recovered = ethers.verifyTypedData(READ_DOMAIN(), READ_TYPES, value, signature);
   } catch {
     return 'That read signature could not be read.';
   }
 
-  if (recovered.toLowerCase() !== viewer.toLowerCase()) {
-    // Not a direct signature — but it may still be a good one.
-    //
-    // A record owned by an account is read by naming the ACCOUNT as the viewer, and
-    // the signature comes from the key that owns it. A contract cannot produce a
-    // signature, so without this check an account could never read its own records,
-    // which is every record created since enrolment started deploying one.
-    //
-    // The account's word is not taken as authority over the record: it only
-    // establishes who is asking. `viewRecord` below still decides whether that viewer
-    // may read, so an account that lies about its owner gains nothing — the contract
-    // refuses it on consent like anyone else.
-    const owner = await accountOwner(viewer).catch(() => null);
-
-    if (!owner || owner.toLowerCase() !== recovered.toLowerCase()) {
-      return (
-        `That read signature was made by ${recovered}, which is neither the viewer ` +
-        `(${ethers.getAddress(viewer)}) nor the owner of the account at that address.`
-      );
-    }
+  const digest = ethers.TypedDataEncoder.hash(READ_DOMAIN(), READ_TYPES, value);
+  const valid = await signatureMatchesAddress(viewer, digest, signature).catch(() => false);
+  if (!valid) {
+    return (
+      `That read signature was made by ${recovered}, and is not valid for viewer ` +
+      `${ethers.getAddress(viewer)}.`
+    );
   }
 
   // Claimed by unique index, so two simultaneous replays cannot both win — which is
   // the case that matters, since a replay racing the original is the whole attack.
   const claimed = await claimOnce(
     'read-nonce',
-    `${recovered.toLowerCase()}:${nonce}`,
+    `${viewer.toLowerCase()}:${nonce}`,
     MAX_AGE_MS
   );
   if (!claimed) {

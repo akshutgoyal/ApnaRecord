@@ -10,58 +10,44 @@
 // for ever, and every signed statement ever captured becomes a permanent credential.
 
 import { ethers } from 'ethers';
+import { signatureMatchesAddress } from '../services/account.js';
 
 /** How long a signed statement stays valid. Short, because it is a bearer credential. */
 export const STATEMENT_MAX_AGE_MS = 5 * 60 * 1000;
 
 /**
- * Recover who signed, without saying who they had to be.
- *
- * Needed because one caller — storing a record's bytes before it is minted — cannot
- * name the signer in advance; it has to recover them and then ask the contract
- * whether they hold the role that permits the action.
- *
- * Returns `{ signer }` or `{ error }`.
+ * Validate a personal-message signature for an EOA or an EIP-1271 account.
+ * Returns `{ signer }` or `{ error }` with the same freshness behavior as other
+ * signed statements.
  */
-export function recoverStatement({
+export async function verifyMessageForAddress({
   message,
+  address,
   timestamp,
   signature,
   maxAgeMs = STATEMENT_MAX_AGE_MS,
 }) {
-  if (!timestamp || !signature) {
-    return { error: 'A signed statement from the wallet is required.' };
-  }
-
   const age = Date.now() - Number(timestamp);
   if (!Number.isFinite(age) || Math.abs(age) > maxAgeMs) {
     return { error: 'The signature is stale. Refresh the page and try again.' };
   }
+  if (!ethers.isAddress(address)) return { error: 'Not a valid address.' };
 
+  let signer = null;
   try {
-    return { signer: ethers.verifyMessage(message, signature) };
+    signer = ethers.verifyMessage(message, signature);
   } catch {
-    return { error: 'That signature could not be read.' };
-  }
-}
-
-/**
- * Returns null when the statement is good, or a plain-language reason when it is not.
- * The message is the caller's job — it must match, byte for byte, whatever the client
- * signed, which is why the wire formats live in one place on each side and a test
- * asserts they agree.
- */
-export function verifyStatement({ message, address, timestamp, signature, maxAgeMs }) {
-  const result = recoverStatement({ message, timestamp, signature, maxAgeMs });
-  if (result.error) return result.error;
-
-  if (!ethers.isAddress(address)) {
-    return 'Not a valid address.';
+    // EIP-1271 wallets may support signatures ethers cannot recover as an EOA.
   }
 
-  if (result.signer.toLowerCase() !== address.toLowerCase()) {
-    return `That signature was made by ${result.signer}, not by ${ethers.getAddress(address)}.`;
+  const valid = await signatureMatchesAddress(address, ethers.hashMessage(message), signature);
+  if (!valid) {
+    return {
+      error: signer
+        ? `That signature was made by ${signer}, and is not valid for ${ethers.getAddress(address)}.`
+        : `That signature is not valid for ${ethers.getAddress(address)}.`,
+      signer,
+    };
   }
-
-  return null;
+  return { signer: signer || ethers.getAddress(address) };
 }

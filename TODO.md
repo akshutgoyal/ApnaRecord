@@ -6,7 +6,7 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 
 - [x] Restrict off-chain clinical metadata and identity labels to entitled viewers.
 - [x] Fund the owner EOA that submits account transactions, and check its balance before requesting a top-up.
-- [ ] Carry the acting account separately from its owner signer through API authentication, profile writes, directory actions, and role checks; support contract signatures consistently.
+- [x] Carry the acting account separately from its owner signer through API authentication, profile writes, directory actions, and role checks; support contract signatures consistently.
 - [ ] Bind profile, recovery, and upload signatures to operation-specific payloads, deadlines, and one-use nonces.
 - [ ] Make OTP verification, contact-grant consumption, and related attempt accounting atomic under concurrent requests.
 - [ ] Replace unsafe dripper nonce rewinds with durable cross-instance transaction state and safe retry/replacement behavior.
@@ -26,4 +26,5 @@ Ordered from the security and correctness findings in [CODEBASE_REVIEW.md](CODEB
 - Initial codebase review completed on 7 October 2026; see [CODEBASE_REVIEW.md](CODEBASE_REVIEW.md) for evidence, code references, and limitations.
 - Finding 1: scoped clinical metadata and identity labels to entitled viewers; committed.
 - Finding 2: enrolment and top-ups fund the transaction-paying owner EOA; the account remains the enrolled identity.
+- Queue item 3: API sessions and authorization now use the acting account; signed writes validate EIP-1271 account authorization and check roles against that account.
 - Remaining fixes are to be handled in queue order. Update this file as each fix is committed.

@@ -271,9 +271,10 @@ export default function Admin() {
           const facility = persona.role === 'hospital' ? persona.address : '';
           const timestamp = Date.now();
           const signature = await signMessage(
-            identityMessage(persona.address, persona.label, facility, timestamp)
+            identityMessage(persona.address, persona.label, facility, timestamp, account)
           );
           await recordIdentity({
+            actor: account,
             account: persona.address,
             label: persona.label,
             facility,
@@ -326,9 +327,10 @@ export default function Admin() {
         // The label lives off-chain now: the event carries no name.
         const timestamp = Date.now();
         const signature = await signMessage(
-          identityMessage(newIdentity.address, newIdentity.label.trim(), facility, timestamp)
+          identityMessage(newIdentity.address, newIdentity.label.trim(), facility, timestamp, account)
         );
         await recordIdentity({
+          actor: account,
           account: newIdentity.address,
           label: newIdentity.label.trim(),
           facility,
@@ -351,9 +353,15 @@ export default function Admin() {
         await tx.wait();
         const timestamp = Date.now();
         const signature = await signMessage(
-          facilityMessage(newFacility.it, newFacility.name.trim(), timestamp)
+          facilityMessage(newFacility.it, newFacility.name.trim(), timestamp, account)
         );
-        await recordFacility({ it: newFacility.it, name: newFacility.name.trim(), timestamp, signature });
+        await recordFacility({
+          actor: account,
+          it: newFacility.it,
+          name: newFacility.name.trim(),
+          timestamp,
+          signature,
+        });
         setNewFacility({ it: '', name: '' });
         await load();
       },
@@ -418,9 +426,10 @@ export default function Admin() {
         // never reproduce it. Their own file used to answer "Tampered".
         const plainHash = digestOf(buffer);
         const timestamp = Date.now();
-        const signature = await signMessage(storeMessage(tokenId, mint.patient, digest, timestamp));
+        const signature = await signMessage(storeMessage(tokenId, mint.patient, digest, timestamp, account));
 
         await storeRecord({
+          actor: account,
           tokenId,
           patient: mint.patient,
           recordType: mint.recordType,

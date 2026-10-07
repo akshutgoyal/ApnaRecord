@@ -26,17 +26,17 @@ import { READ_DOMAIN, READ_TYPES } from '../lib/readProof.js';
  * beyond reading. Every write is still signed per call, and entitlement is still decided
  * against the chain on the server for each request.
  *
- * The signer is REGISTERED rather than passed, because passing it would mean threading a
- * wallet through every call site that reads a list. ChainProvider calls setProofSigner
- * once, on connect.
+ * The signer and acting account are REGISTERED rather than passed, because passing them
+ * would mean threading a wallet through every call site that reads a list. ChainProvider
+ * registers the pair once; for a local account they are the owner EOA and account contract.
  */
 const TOKEN_KEY = 'apnarecord-read-token';
 
-let proofSigner = null;
-let inFlight = null;
+let proofContext = null;
+const inFlight = new Map();
 
-export function setProofSigner(fn) {
-  proofSigner = typeof fn === 'function' ? fn : null;
+export function setProofContext(fn) {
+  proofContext = typeof fn === 'function' ? fn : null;
 }
 
 const store = () => (typeof sessionStorage !== 'undefined' ? sessionStorage : null);
@@ -93,25 +93,30 @@ async function freshToken(signer, address) {
 }
 
 async function authHeaders() {
-  if (!proofSigner) return {};
+  if (!proofContext) return {};
   try {
-    const signer = await proofSigner();
+    const context = await proofContext();
+    const signer = context?.signer;
     if (!signer) return {};
 
-    const address = getAddress(await signer.getAddress());
+    const address = getAddress(context.viewer || (await signer.getAddress()));
     const cached = readToken();
     if (cached && cached.address === address && cached.expiresAt - 30_000 > Date.now()) {
       return { Authorization: `Bearer ${cached.token}` };
     }
     clearReadToken();
 
-    // One exchange at a time. Four lists loading together must not produce four prompts.
-    if (!inFlight) {
-      inFlight = freshToken(signer, address).finally(() => {
-        inFlight = null;
+    // One exchange per acting account. Concurrent lists for the same account must not
+    // produce duplicate prompts, and an account switch must not reuse another account's
+    // pending session token.
+    let pending = inFlight.get(address);
+    if (!pending) {
+      pending = freshToken(signer, address).finally(() => {
+        if (inFlight.get(address) === pending) inFlight.delete(address);
       });
+      inFlight.set(address, pending);
     }
-    const minted = await inFlight;
+    const minted = await pending;
     return { Authorization: `Bearer ${minted.token}` };
   } catch {
     // No proof available. The request goes unsigned, and the endpoints that need one will

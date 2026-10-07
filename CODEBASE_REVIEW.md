@@ -4,7 +4,7 @@ Initial review: 7 October 2026, against commit `968dca7`.
 
 This review covers the Solidity contracts, API authorization and storage, enrolment and recovery, browser signing and encryption, indexing, dashboards, deployment configuration, and existing tests. Findings marked “reproduced” were demonstrated locally; others follow from the referenced code paths. No production service was probed.
 
-Follow-up on 7 October 2026: finding 1 was fixed by scoping off-chain metadata and identity labels to entitled viewers. Finding 2 was fixed by sending enrolment and top-up funds to the account owner's EOA, which pays for the outer `account.execute` transaction; the account contract remains the on-chain identity. These follow-up changes were not included in the original test run; findings 3–10 remain open.
+Follow-up on 7 October 2026: finding 1 was fixed by scoping off-chain metadata and identity labels to entitled viewers. Finding 2 was fixed by sending enrolment and top-up funds to the account owner's EOA, which pays for the outer `account.execute` transaction. Finding 6 was fixed by carrying the acting account separately from its signing EOA, using EIP-1271 validation for account signatures, and applying role checks to the acting account. These follow-up changes were not included in the original test run; findings 3–5 and 7–10 remain open.
 
 ## Assessment
 

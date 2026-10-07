@@ -104,9 +104,10 @@ export default function Doctor() {
         }
         const timestamp = Date.now();
         const signature = await signMessage(
-          requestMessage(requestId, request.patient, request.recordType, timestamp)
+          requestMessage(requestId, request.patient, request.recordType, timestamp, account)
         );
         await recordRequest({
+          actor: account,
           requestId,
           patient: request.patient,
           recordType: request.recordType,

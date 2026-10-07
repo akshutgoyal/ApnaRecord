@@ -34,6 +34,7 @@ async function post(path, body, headers = {}) {
 function recordBody(overrides = {}) {
   return {
     tokenId: 1,
+    actor: '0x00000000000000000000000000000000000000A2',
     patient: '0x00000000000000000000000000000000000000A1',
     recordType: 'MRI_SCAN',
     fileName: 'scan.bin',
@@ -95,11 +96,11 @@ const strangerDigest = ethers.keccak256(
   Buffer.from(recordBody().ciphertext, 'base64')
 );
 const strangerSignature = await stranger.signMessage(
-  storeMessage(1, recordBody().patient, strangerDigest, strangerTime)
+  storeMessage(1, recordBody().patient, strangerDigest, strangerTime, stranger.address)
 );
 const notMinting = await post(
   '/records',
-  recordBody({ timestamp: strangerTime, signature: strangerSignature })
+  recordBody({ actor: stranger.address, timestamp: strangerTime, signature: strangerSignature })
 );
 check(
   'a well-formed signature from an account with no minting role is refused',

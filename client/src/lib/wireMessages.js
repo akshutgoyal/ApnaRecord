@@ -48,11 +48,12 @@ export function rotateRecoveryMessage(address, timestamp) {
 /**
  * Must match server/src/controllers/directoryController.js `identityMessage`.
  */
-export function identityMessage(account, label, facility, timestamp) {
+export function identityMessage(account, label, facility, timestamp, actor = account) {
   const facilityPart =
     facility && String(facility).trim() !== '' ? getAddress(facility) : '';
   return (
     'ApnaRecord register identity\n' +
+    `actor: ${getAddress(actor)}\n` +
     `account: ${getAddress(account)}\n` +
     `label: ${String(label || '').slice(0, 80)}\n` +
     `facility: ${facilityPart}\n` +
@@ -63,9 +64,10 @@ export function identityMessage(account, label, facility, timestamp) {
 /**
  * Must match server/src/controllers/directoryController.js `facilityMessage`.
  */
-export function facilityMessage(it, name, timestamp) {
+export function facilityMessage(it, name, timestamp, actor = it) {
   return (
     'ApnaRecord register facility\n' +
+    `actor: ${getAddress(actor)}\n` +
     `it: ${getAddress(it)}\n` +
     `name: ${String(name || '').slice(0, 120)}\n` +
     `timestamp: ${timestamp}`
@@ -75,9 +77,10 @@ export function facilityMessage(it, name, timestamp) {
 /**
  * Must match server/src/controllers/directoryController.js `requestMessage`.
  */
-export function requestMessage(requestId, patient, recordType, timestamp) {
+export function requestMessage(requestId, patient, recordType, timestamp, actor = patient) {
   return (
     'ApnaRecord record request\n' +
+    `actor: ${getAddress(actor)}\n` +
     `requestId: ${Number(requestId)}\n` +
     `patient: ${getAddress(patient)}\n` +
     `recordType: ${String(recordType || '').slice(0, 60)}\n` +
@@ -91,13 +94,13 @@ export function requestMessage(requestId, patient, recordType, timestamp) {
  * keccak256, but the two sides independently build this string and a stray checksum
  * case would produce a signature that verifies nowhere.
  */
-export function storeMessage(tokenId, patient, recordHash, timestamp) {
+export function storeMessage(tokenId, patient, recordHash, timestamp, actor = patient) {
   return (
     'ApnaRecord store record\n' +
+    `actor: ${getAddress(actor)}\n` +
     `tokenId: ${Number(tokenId)}\n` +
     `patient: ${getAddress(patient)}\n` +
     `recordHash: ${String(recordHash).toLowerCase()}\n` +
     `timestamp: ${timestamp}`
   );
 }
-

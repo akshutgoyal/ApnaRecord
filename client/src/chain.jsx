@@ -22,7 +22,7 @@ import React, {
 } from 'react';
 import { BrowserProvider, Contract, Interface, getAddress, isAddress } from 'ethers';
 import { ABI, ACCOUNT_ABI, CONTRACT_ADDRESS, CHAIN_ID } from './contract';
-import { chainPermissions, recordsByOwner, setProofSigner } from './services/api';
+import { chainPermissions, recordsByOwner, setProofContext } from './services/api';
 import { DEMO_ACCOUNTS } from './config/demoAccounts';
 import {
   getLocalProvider,
@@ -290,21 +290,28 @@ export function ChainProvider({ children }) {
     return provider.getSigner();
   }, [getReadProvider]);
 
+  const getProofContext = useCallback(async () => {
+    if (demoRoleRef.current) return null;
+    const signer = await getSigner();
+    const viewer = hasSession() ? sessionAddress() : await signer.getAddress();
+    return viewer ? { signer, viewer } : null;
+  }, [getSigner]);
+
   /**
    * Let the API module sign for itself.
    *
    * It holds no key, and threading a wallet through every call site that reads a list
-   * would touch a dozen components. So the getter is registered once, and the module asks
-   * for it only when a request must prove who is asking.
+   * would touch a dozen components. So a signer and its acting account are registered
+   * once, and the module asks only when a request must prove who is asking.
    *
    * Nothing signs until a gated read happens, and the token it buys is cached for its
    * ten-minute life — so this costs one prompt per wallet per ten minutes, not one per
    * page load.
    */
   useEffect(() => {
-    setProofSigner(getSigner);
-    return () => setProofSigner(null);
-  }, [getSigner]);
+    setProofContext(getProofContext);
+    return () => setProofContext(null);
+  }, [getProofContext]);
 
   // No eager clear here.
   //
@@ -313,10 +320,10 @@ export function ChainProvider({ children }) {
   // sessionStorage token that had just survived the navigation. The point of that token
   // is that a route change costs no prompt.
   //
-  // It was also redundant. authHeaders() reads the cached entry's own `address` and
-  // refuses it unless it matches the signer in hand, so a different wallet cannot inherit
-  // one regardless. The check lives where the token is used, which is the only place it
-  // can be trusted.
+  // It was also redundant. authHeaders() reads the cached entry's acting `address` and
+  // refuses it unless it matches the current account, so a different account cannot
+  // inherit one. The check lives where the token is used, which is the only place it can
+  // be trusted.
 
   /** A contract for reads: no signer, so MetaMask never prompts. */
   const readContract = useCallback(async () => {
