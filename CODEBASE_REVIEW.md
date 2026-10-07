@@ -4,7 +4,7 @@ Initial review: 7 October 2026, against commit `968dca7`.
 
 This review covers the Solidity contracts, API authorization and storage, enrolment and recovery, browser signing and encryption, indexing, dashboards, deployment configuration, and existing tests. Findings marked “reproduced” were demonstrated locally; others follow from the referenced code paths. No production service was probed.
 
-Follow-up on 8 October 2026: findings 1, 2, 3, 4, and 6 have been repaired and committed. Finding 1 scopes off-chain metadata and identity labels to entitled viewers. Finding 2 funds the account owner's EOA, which pays for the outer `account.execute` transaction. Finding 3 binds signed writes to operation-specific payloads and one-use nonces. Finding 4 makes OTPs, contact grants, and rate-limit accounting safe under concurrent requests. Finding 6 carries the acting account separately from its signing EOA, validates account signatures through EIP-1271, and checks roles on the acting account. Findings 5 and 7–10 remain open.
+Follow-up on 8 October 2026: findings 1–6 have been repaired and committed. Finding 1 scopes off-chain metadata and identity labels to entitled viewers. Finding 2 funds the account owner's EOA, which pays for the outer `account.execute` transaction. Finding 3 binds signed writes to operation-specific payloads and one-use nonces. Finding 4 makes OTPs, contact grants, and rate-limit accounting safe under concurrent requests. Finding 5 tracks each active dripper intent and signed transaction under a shared lease, and retries uncertain sends with the same bytes instead of rewinding the nonce. Finding 6 carries the acting account separately from its signing EOA, validates account signatures through EIP-1271, and checks roles on the acting account. Findings 7–10 remain open.
 
 ## Assessment
 
@@ -79,13 +79,15 @@ References: `server/src/services/otp.js:126`, `:190`; `server/src/lib/rateLimit.
 
 ### 5. High — existing cross-instance dripper tests fail on nonce reuse
 
-References: `server/src/services/dripper.js:102`, `:192`; `tests/integration/dripper.test.mjs`.
+**Status: repaired and committed.**
+
+References: `server/src/services/dripper.js` (`ensureNonceDocument`, `withNonceLease`, `processActiveTransaction`); `tests/integration/dripper.test.mjs`.
 
 The full suite failed three dripper assertions: nonce reuse, nonce uniqueness, and contiguity. The mock chain reported reuse of nonces `10`, `15`, `27`, and `28` during this run.
 
 `reconcileNonce` treats a pending transaction count below the database counter as grounds to rewind when `inFlight` reaches zero. That is not proof that a transaction was never broadcast. The provider/node may report a stale pending count, and another instance may broadcast and settle after the reconciler's observation. Its update uses `nextNonce > onChain` instead of comparing the exact observed counter/version, so it can rewind newer completed claims as well. Ethers read caching is another possible source of stale observations. These are code-level failure mechanisms; the relative contribution of each needs targeted instrumentation.
 
-**Repair:** Use a durable per-nonce transaction/outbox state and safe replacement/retry rules rather than rewinding from a single pending-count observation. Serialize reconciliation with claims across processes and use conditional version checks. Cover cached/stale RPC answers, delayed broadcast, crashes, and ambiguous send errors. Do not deploy multiple funding instances with the current behavior.
+**Repair applied:** A Mongo-backed lease serializes the dripper wallet across API instances. Before broadcast, the service stores the operation intent and exact signed transaction; it advances the nonce only after a receipt consumes it. A later process resumes the saved intent, checks the saved hash, or rebroadcasts the exact signed bytes. The service never rewinds from a pending-count read. An older counter-only row with an unresolved nonce is refused for manual chain inspection. The cross-instance suite now injects both a pre-accept rejection and an accepted transaction with a corrupted response, then asserts recovery and nonce contiguity; those new assertions were not run during this repair.
 
 ### 6. High — the account address is lost in generic API authentication and write checks
 

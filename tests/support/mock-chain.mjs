@@ -15,6 +15,7 @@ const PORT = Number(process.env.MOCK_PORT) || 8545;
 const DRIPPER = (process.env.MOCK_DRIPPER || '').toLowerCase();
 // How many sends to accept but then report with a hash the client will reject.
 let badHashSends = Number(process.env.MOCK_BAD_HASH_COUNT) || 0;
+let rejectedSends = 0;
 
 // Contract reads the server makes before it will store a record or verify a proof.
 // Typed, so the mock can answer them with correctly encoded results instead of a bare
@@ -52,6 +53,7 @@ const roleAssignments = new Map();
 
 const balances = new Map();
 const nonces = new Map();
+const contractCodes = new Map();
 // Sender -> every nonce it has ever used. The point of the whole suite.
 const usedNonces = new Map();
 // txHash -> receipt, so `tx.wait()` has something to return. Without this a
@@ -85,6 +87,12 @@ function handle(message) {
       roleAssignments.set(`${String(role).toLowerCase()}:${at(account)}`, Boolean(held));
       return true;
     }
+    case 'mock_failNextSendResponse':
+      badHashSends += 1;
+      return true;
+    case 'mock_rejectNextSend':
+      rejectedSends += 1;
+      return true;
     case 'eth_chainId':
       return hex(84532);
     case 'net_version':
@@ -93,6 +101,8 @@ function handle(message) {
       return hex(1_000_000 + sent.length);
     case 'eth_getBalance':
       return hex(balances.get(at(message.params?.[0])) ?? 0n);
+    case 'eth_getCode':
+      return contractCodes.get(at(message.params?.[0])) || '0x';
     case 'eth_getTransactionCount':
       return hex(nonces.get(at(message.params?.[0])) ?? 0);
     case 'eth_estimateGas':
@@ -233,9 +243,13 @@ function handle(message) {
       const tx = Transaction.from(message.params[0]);
       const from = at(tx.from);
       const to = at(tx.to);
-      sent.push({ from, to, value: tx.value.toString(), nonce: tx.nonce });
-
-      const used = usedNonces.get(from) || new Set();
+      if (rejectedSends > 0) {
+        rejectedSends -= 1;
+        console.log('  !! rejected before accepting the transaction');
+        return { __rpcError: { code: -32000, message: 'temporary send rejection' } };
+      }
+      const used = usedNonces.get(from) || new Map();
+      const previousHash = used.get(tx.nonce);
       // A REUSE is the failure that matters, and it is the only thing flagged here.
       //
       // An earlier version compared against the next expected number, which flagged
@@ -243,11 +257,17 @@ function handle(message) {
       // reach the node in any order, and that is fine — nonces exist to be ordered by
       // the chain, not by arrival. What is not fine is the same nonce twice, because
       // one transaction then replaces the other and a payment silently disappears.
-      if (used.has(tx.nonce)) {
+      if (previousHash && previousHash !== tx.hash) {
         console.log(`  !! NONCE REUSE from ${from}: ${tx.nonce} was already sent`);
+        return { __rpcError: { code: -32000, message: 'nonce already used by another transaction' } };
       }
-      used.add(tx.nonce);
+      if (previousHash === tx.hash) {
+        console.log(`  known transaction retry ${tx.hash}`);
+        return tx.hash;
+      }
+      used.set(tx.nonce, tx.hash);
       usedNonces.set(from, used);
+      sent.push({ from, to, value: tx.value.toString(), nonce: tx.nonce });
       nonces.set(from, Math.max(nonces.get(from) ?? 0, tx.nonce + 1));
 
       balances.set(from, (balances.get(from) ?? 0n) - tx.value);
@@ -258,6 +278,7 @@ function handle(message) {
       // is the account the chain would really have created.
       const isDeploy = !tx.to;
       const contractAddress = isDeploy ? getCreateAddress({ from: tx.from, nonce: tx.nonce }) : null;
+      if (contractAddress) contractCodes.set(contractAddress.toLowerCase(), '0x6000');
       const blockNumber = 1_000_000 + sent.length;
 
       receipts.set(tx.hash, {
@@ -328,6 +349,9 @@ const server = http.createServer((req, res) => {
           id: message.id,
           error: { code: 3, message: `execution reverted: ${result.__revert}` },
         };
+      }
+      if (result && typeof result === 'object' && result.__rpcError) {
+        return { jsonrpc: '2.0', id: message.id, error: result.__rpcError };
       }
       return { jsonrpc: '2.0', id: message.id, result };
     };

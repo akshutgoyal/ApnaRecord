@@ -6,12 +6,10 @@
 //
 // Three rules shape this file, each learned from a failure mode:
 //
-//   1. SENDS ARE SERIALISED, AND THE NONCE IS CLAIMED IN THE DATABASE. One wallet
-//      paying many users at once will hand two transactions the same nonce. The
-//      second is rejected, the first lands, and the result is a user whose wallet was
-//      never funded while the API reported success. A promise chain only orders sends
-//      inside one process — two instances each kept their own counter — so the claim
-//      that actually makes this safe is an atomic `$inc` in MongoDB.
+//   1. SENDS ARE SERIALISED ACROSS INSTANCES, AND THE EXACT SIGNED TRANSACTION IS
+//      STORED BEFORE BROADCAST. If a node accepts a transaction but its reply is lost,
+//      the next process can inspect or rebroadcast those same bytes without reusing the
+//      nonce for a different payment.
 //
 //   2. IT NEVER FUNDS AN ADDRESS THAT ALREADY HAS ENOUGH. A funded idle wallet is
 //      a wallet someone else can drain, and a dripper's float is the thing an
@@ -23,6 +21,7 @@
 //      signups keep succeeding and writes start failing.
 
 import { ethers } from 'ethers';
+import { randomUUID } from 'node:crypto';
 import { EnrolmentModel, DripperModel, DripLedgerModel, isDbReady } from '../models/index.js';
 
 const AMOUNT = ethers.parseEther(process.env.DRIP_AMOUNT || '0.01');
@@ -36,6 +35,11 @@ const MAX_PER_CONTACT = Number(process.env.DRIP_MAX_PER_CONTACT) || 3;
 
 let wallet = null;
 let chain = Promise.resolve();
+
+const NONCE_STATE_VERSION = 2;
+const NONCE_LEASE_MS = 90_000;
+const NONCE_LEASE_HEARTBEAT_MS = 20_000;
+const NONCE_LEASE_WAIT_MS = 120_000;
 
 export function dripEnabled() {
   return Boolean(process.env.DRIPPER_PRIVATE_KEY && process.env.RPC_URL);
@@ -60,314 +64,432 @@ function serialise(task) {
   return run;
 }
 
-/**
- * Hand out the next nonce.
- *
- * The claim is an atomic `$inc` in MongoDB, and that is what makes it correct. A
- * promise chain orders sends inside one process and says nothing about a second
- * instance — each would keep its own counter, hand the same nonce to two different
- * transactions, and one would be rejected while both callers were told they succeeded.
- * A dripper that reports success for a payment it never made is worse than one that
- * fails loudly.
- *
- * The serialisation below is kept, but only as an optimisation: it stops one busy
- * process from piling concurrent claims onto the database. It is not what makes this
- * safe, and removing it would not introduce a bug.
- *
- * AFTER THE FIRST CLAIM, THE COUNTER ONLY EVER MOVES BY ONE. An earlier version also
- * snapped it forward to the chain's count on every call, on the reasoning that a nonce
- * too high is "merely a gap, which later transactions fill in on their own". That
- * reasoning is wrong, and the snap was unsafe for two independent reasons:
- *
- *   • Nonces must be sequential. If 25 is never sent, then 26, 27, 28 sit in the
- *     mempool and never mine — the dripper does not recover, it stalls for good.
- *   • `$set` is a blind write that jumps to a value rather than stepping to it, so it
- *     skips whatever lies between the counter and the chain's count. A concurrent
- *     `$inc` landing between the read and the write is silently lost too.
- *
- * The counter is incremented BEFORE every send, so it can never legitimately be behind
- * the chain, and there is nothing for a snap to recover. The chain is therefore
- * consulted exactly once, when the counter does not exist yet.
- *
- * One correction on the record. This was removed while chasing an intermittent "gap"
- * failure in the cross-instance suite. It was not the cause, and neither of my first two
- * explanations was: the suite counted only `drip` lines, and enrolment had started
- * deploying an account per user, so every deploy consumed a nonce between two drips and
- * the sequence looked gappy while nothing had been skipped. Instrumenting the send paths
- * proved it — no send ever threw. The snap is still worth removing on its own merits;
- * it just was not fixing the symptom that led here.
- */
-let seeded = false;
-
-  async function claimNonce() {
-    const w = getWallet();
-    const key = w.address.toLowerCase();
-
-    // `$setOnInsert` and nothing else. If the document exists we trust it, because it is
-    // only ever advanced by one, immediately before a send that is about to happen.
-    if (!seeded) {
-      const onChain = await w.provider.getTransactionCount(w.address, 'pending');
+/** Create the counter once; old ambiguous counters are never rewound automatically. */
+async function ensureNonceDocument(w, key) {
+  let doc = await DripperModel.findOne({ address: key }).lean();
+  if (!doc) {
+    const pending = await w.provider.getTransactionCount(w.address, 'pending');
+    try {
       await DripperModel.updateOne(
         { address: key },
-        { $setOnInsert: { address: key, nextNonce: onChain, inFlight: 0 } },
+        {
+          $setOnInsert: {
+            address: key,
+            nextNonce: pending,
+            nonceStateVersion: NONCE_STATE_VERSION,
+            inFlight: 0,
+            nonceLeaseId: '',
+            nonceLeaseUntil: null,
+            activeTransaction: null,
+          },
+        },
         { upsert: true }
       );
-      seeded = true;
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+    }
+    doc = await DripperModel.findOne({ address: key }).lean();
+  }
+  if (!doc) throw new Error('Could not initialize the dripper nonce state.');
+  if (Number(doc.nonceStateVersion || 0) >= NONCE_STATE_VERSION) return doc;
+
+  const pending = await w.provider.getTransactionCount(w.address, 'pending');
+  const oldNext = Number(doc.nextNonce || 0);
+  if (Number(doc.inFlight || 0) > 0 || oldNext > pending) {
+    throw new Error(
+      'The saved dripper nonce predates durable transaction tracking and has an unresolved ' +
+        'claim. Check the dripper account on chain before allowing another send; the counter ' +
+        'was left unchanged.'
+    );
+  }
+
+  const migrated = await DripperModel.updateOne(
+    {
+      address: key,
+      nextNonce: oldNext,
+      inFlight: { $in: [0, null] },
+      $or: [{ nonceStateVersion: { $exists: false } }, { nonceStateVersion: { $lt: NONCE_STATE_VERSION } }],
+    },
+    {
+      $set: {
+        nextNonce: pending,
+        nonceStateVersion: NONCE_STATE_VERSION,
+        inFlight: 0,
+        inFlightAt: null,
+        nonceLeaseId: '',
+        nonceLeaseUntil: null,
+        activeTransaction: null,
+      },
+    }
+  );
+  doc = await DripperModel.findOne({ address: key }).lean();
+  if (!migrated.matchedCount && Number(doc?.nonceStateVersion || 0) < NONCE_STATE_VERSION) {
+    throw new Error('The dripper nonce state changed during migration. Retry after it settles.');
+  }
+  return doc;
+}
+
+/** A lease serializes the one hot wallet across every API instance. */
+async function withNonceLease(task) {
+  const w = getWallet();
+  const key = w.address.toLowerCase();
+  await ensureNonceDocument(w, key);
+
+  const leaseId = randomUUID();
+  const startedAt = Date.now();
+  let locked = null;
+  while (!locked) {
+    const now = new Date();
+    locked = await DripperModel.findOneAndUpdate(
+      {
+        address: key,
+        $or: [{ nonceLeaseUntil: null }, { nonceLeaseUntil: { $lte: now } }],
+      },
+      { $set: { nonceLeaseId: leaseId, nonceLeaseUntil: new Date(now.getTime() + NONCE_LEASE_MS) } },
+      { new: true }
+    ).lean();
+    if (locked) break;
+    if (Date.now() - startedAt >= NONCE_LEASE_WAIT_MS) {
+      throw new Error('Another dripper transaction is still active. Retry after it settles.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  let heartbeatRunning = false;
+  const heartbeat = setInterval(async () => {
+    if (heartbeatRunning) return;
+    heartbeatRunning = true;
+    try {
+      await DripperModel.updateOne(
+        { address: key, nonceLeaseId: leaseId },
+        { $set: { nonceLeaseUntil: new Date(Date.now() + NONCE_LEASE_MS) } }
+      );
+    } catch (error) {
+      console.warn('[Dripper] Could not renew the nonce lease -', error.message);
+    } finally {
+      heartbeatRunning = false;
+    }
+  }, NONCE_LEASE_HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  try {
+    return await task({ w, key, leaseId });
+  } finally {
+    clearInterval(heartbeat);
+    try {
+      await DripperModel.updateOne(
+        { address: key, nonceLeaseId: leaseId },
+        { $set: { nonceLeaseId: '', nonceLeaseUntil: null } }
+      );
+    } catch (error) {
+      console.warn('[Dripper] Could not release the nonce lease -', error.message);
+    }
+  }
+}
+
+async function assertNonceLease(key, leaseId) {
+  const lease = await DripperModel.exists({
+    address: key,
+    nonceLeaseId: leaseId,
+    nonceLeaseUntil: { $gt: new Date() },
+  });
+  if (!lease) throw new Error('The dripper nonce lease expired. Retry the transaction safely.');
+}
+
+async function storeTransactionError(key, leaseId, jobId, error) {
+  try {
+    await DripperModel.updateOne(
+      { address: key, nonceLeaseId: leaseId, 'activeTransaction.id': jobId },
+      {
+        $set: {
+          'activeTransaction.lastError': String(error?.shortMessage || error?.message || error),
+          'activeTransaction.updatedAt': new Date(),
+        },
+      }
+    );
+  } catch {
+    // The signed transaction remains in the shared document and can be retried later.
+  }
+}
+
+async function persistSignedTransaction({ key, leaseId, job, rawTransaction, txHash }) {
+  await assertNonceLease(key, leaseId);
+  await DripperModel.updateOne(
+    {
+      address: key,
+      nonceLeaseId: leaseId,
+      'activeTransaction.id': job.id,
+      'activeTransaction.rawTransaction': { $in: ['', null] },
+    },
+    {
+      $set: {
+        'activeTransaction.rawTransaction': rawTransaction,
+        'activeTransaction.txHash': txHash,
+        'activeTransaction.state': 'signed',
+        'activeTransaction.lastError': '',
+        'activeTransaction.updatedAt': new Date(),
+      },
+    }
+  );
+
+  const current = await DripperModel.findOne({ address: key }).lean();
+  const active = current?.activeTransaction;
+  if (!active || active.id !== job.id || !active.rawTransaction) {
+    throw new Error('The signed dripper transaction was not saved; it was not broadcast.');
+  }
+  // If a lease owner signed it after a timeout, only those persisted bytes may be sent.
+  return active;
+}
+
+async function finalizeTransaction({ w, key, leaseId, job, receipt }) {
+  const success = Number(receipt?.status) === 1;
+  const address =
+    job.kind === 'deployment' && success
+      ? receipt.contractAddress || ethers.getCreateAddress({ from: w.address, nonce: job.nonce })
+      : '';
+  const update = {
+    $max: { nextNonce: job.nonce + 1 },
+    $set: { activeTransaction: null },
+  };
+  if (job.kind === 'deployment' && success) {
+    update.$push = {
+      recentDeployments: {
+        $each: [
+          {
+            fingerprint: job.fingerprint,
+            txHash: job.txHash,
+            address,
+            chainId: String((await w.provider.getNetwork()).chainId),
+            completedAt: new Date(),
+          },
+        ],
+        $slice: -100,
+      },
+    };
+  }
+
+  const committed = await DripperModel.updateOne(
+    {
+      address: key,
+      nonceLeaseId: leaseId,
+      nonceLeaseUntil: { $gt: new Date() },
+      'activeTransaction.id': job.id,
+    },
+    update
+  );
+  if (!committed.matchedCount) {
+    const current = await DripperModel.findOne({ address: key }).lean();
+    if (current?.activeTransaction?.id === job.id || Number(current?.nextNonce || 0) <= job.nonce) {
+      throw new Error(`Transaction ${job.txHash} is confirmed, but its durable state needs a retry.`);
+    }
+  }
+
+  return {
+    success,
+    nonce: job.nonce,
+    kind: job.kind,
+    fingerprint: job.fingerprint,
+    txHash: job.txHash,
+    address,
+    error: success ? '' : `Transaction ${job.txHash} reverted on chain.`,
+  };
+}
+
+async function processActiveTransaction({ w, key, leaseId, job }) {
+  if (!job.rawTransaction) {
+    await assertNonceLease(key, leaseId);
+    const request =
+      job.kind === 'deployment'
+        ? { data: job.data, nonce: job.nonce }
+        : { to: job.to, value: BigInt(job.value), nonce: job.nonce, gasLimit: 21_000n };
+    const populated = await w.populateTransaction(request);
+    const rawTransaction = await w.signTransaction(populated);
+    const txHash = ethers.Transaction.from(rawTransaction).hash;
+    job = await persistSignedTransaction({ key, leaseId, job, rawTransaction, txHash });
+  }
+
+  const txHash = job.txHash || ethers.Transaction.from(job.rawTransaction).hash;
+  const trackedJob = { ...job, txHash };
+  try {
+    let receipt = null;
+    try {
+      receipt = await w.provider.getTransactionReceipt(txHash);
+    } catch {
+      // Rebroadcasting the persisted bytes remains safe when this read is unavailable.
+    }
+    if (receipt) return await finalizeTransaction({ w, key, leaseId, job: trackedJob, receipt });
+
+    let transaction = null;
+    try {
+      transaction = await w.provider.getTransaction(txHash);
+    } catch {
+      // The exact signed bytes remain available if the node cannot answer this read.
+    }
+    if (!transaction) {
+      try {
+        transaction = await w.provider.broadcastTransaction(job.rawTransaction);
+      } catch (error) {
+        try {
+          receipt = await w.provider.getTransactionReceipt(txHash);
+        } catch {
+          receipt = null;
+        }
+        if (receipt) return await finalizeTransaction({ w, key, leaseId, job: trackedJob, receipt });
+
+        try {
+          transaction = await w.provider.getTransaction(txHash);
+        } catch {
+          transaction = null;
+        }
+        if (!transaction) throw error;
+      }
     }
 
-    // Before claiming, heal a counter that sits ahead of the chain.
-    //
-    // This is the reconciliation the comment below used to explain why it was absent. It
-    // is safe now for one reason: the in-flight count is in the SHARED document, so
-    // "nobody is mid-send anywhere" is a fact any instance can establish, where a
-    // process-local guard could only ever speak for itself.
-    await reconcileNonce(key);
-
-    // `$inc` both, atomically. `new: false` returns the document as it was BEFORE the
-    // increment, which is the nonce being claimed — and because in-flight was raised in
-    // the same operation, no reconciler anywhere can rewind this claim out from under us.
-    const claimed = await DripperModel.findOneAndUpdate(
-      { address: key },
-      { $inc: { nextNonce: 1, inFlight: 1 }, $set: { inFlightAt: new Date() } },
-      { new: false, lean: true }
+    await assertNonceLease(key, leaseId);
+    await DripperModel.updateOne(
+      { address: key, nonceLeaseId: leaseId, 'activeTransaction.id': job.id },
+      {
+        $set: {
+          'activeTransaction.state': 'broadcast',
+          'activeTransaction.txHash': txHash,
+          'activeTransaction.lastError': '',
+          'activeTransaction.updatedAt': new Date(),
+        },
+      }
     );
 
-    if (!claimed) {
-      throw new Error('Could not claim a nonce — the dripper counter document is missing.');
-    }
-    return claimed.nextNonce;
-  }
-
-  /**
-   * Settle a claim, and optionally hand the nonce back.
-   *
-   * Every claim reaches here exactly once: on success, on a pre-broadcast failure, and on
-   * an ambiguous one. The in-flight decrement is unconditional, because the send is over
-   * in all three cases — leaving it raised would block reconciliation for good, and a
-   * counter that can never be healed is worse than one that needs healing.
-   *
-   * The rewind is the part that must stay conditional. A claimed nonce that was never
-   * broadcast is the permanent gap that stalls everything after it, so it goes back — but
-   * only while the counter is still immediately after our claim. If anything has claimed
-   * since, reclaiming would collide with it, and a rare real gap beats a reused nonce.
-   */
-  async function settleNonce(nonce, { unused = false } = {}) {
-    const w = getWallet();
-    const key = w.address.toLowerCase();
+    let mined;
     try {
-      // `$gt: 0` because a document written before this field existed has no inFlight,
-      // and Mongo would treat a missing field as 0 and decrement it to -1.
-      await DripperModel.updateOne(
-        { address: key, inFlight: { $gt: 0 } },
-        { $inc: { inFlight: -1 } }
-      );
+      mined = await transaction.wait();
+    } catch (error) {
+      try {
+        mined = await w.provider.getTransactionReceipt(txHash);
+      } catch {
+        mined = null;
+      }
+      if (!mined) throw error;
+    }
+    if (!mined) throw new Error(`Transaction ${txHash} has not produced a receipt yet.`);
+    return await finalizeTransaction({ w, key, leaseId, job: trackedJob, receipt: mined });
+  } catch (error) {
+    await storeTransactionError(key, leaseId, job.id, error);
+    throw error;
+  }
+}
 
-      if (unused) {
+async function runTransaction(intent) {
+  return serialise(() =>
+    withNonceLease(async ({ w, key, leaseId }) => {
+      let state = await DripperModel.findOne({ address: key }).lean();
+      if (state?.activeTransaction) {
+        const previous = state.activeTransaction;
+        const recovered = await processActiveTransaction({ w, key, leaseId, job: previous });
+        const sameRequest = previous.kind === intent.kind && previous.fingerprint === intent.fingerprint;
+        if (sameRequest) {
+          if (!recovered.success) throw new Error(recovered.error);
+          return recovered;
+        }
+        state = await DripperModel.findOne({ address: key }).lean();
+      }
+
+      const network = intent.kind === 'deployment' ? await w.provider.getNetwork() : null;
+      if (network && state?.recentDeployments?.length) {
+        const last = [...state.recentDeployments].reverse().find((deployment) =>
+          deployment.fingerprint === intent.fingerprint && deployment.chainId === String(network.chainId)
+        );
+        if (last) {
+          const code = await w.provider.getCode(last.address);
+          if (code && code !== '0x') {
+            return {
+              success: true,
+              kind: 'deployment',
+              fingerprint: intent.fingerprint,
+              txHash: last.txHash,
+              address: last.address,
+            };
+          }
+        }
+      }
+
+      await assertNonceLease(key, leaseId);
+      const pending = await w.provider.getTransactionCount(w.address, 'pending');
+      state = await DripperModel.findOne({ address: key }).lean();
+      const currentNonce = Number(state?.nextNonce || 0);
+      const nonce = Math.max(currentNonce, pending);
+      if (pending > currentNonce) {
         await DripperModel.updateOne(
-          { address: key, nextNonce: nonce + 1 },
-          { $set: { nextNonce: nonce } }
+          { address: key, nonceLeaseId: leaseId, activeTransaction: null },
+          { $max: { nextNonce: pending } }
         );
       }
-    } catch (error) {
-      // Settling is best-effort. Failing here must not mask the send error that caused
-      // it, which is the one worth reporting.
-      console.warn('[Dripper] Could not settle nonce', nonce, '-', error.message);
-    }
-  }
 
-  /**
-   * Pull the counter back to the chain when it has run ahead and nothing is in flight.
-   *
-   * Why the chain can be behind: a claim is made before the send, and a failure at the
-   * broadcast is ambiguous — the node may or may not be holding the transaction. The
-   * nonce stays spent, correctly, and the counter ends up one ahead of anything the node
-   * has seen. Nonces are sequential, so that one skipped value stalls every drip behind
-   * it permanently.
-   *
-   * Why this is safe now: the guard is `inFlight: 0` IN THE UPDATE ITSELF, not in a read
-   * before it. A claim landing between our read and our write raises inFlight and sets
-   * nextNonce forward in the same atomic operation, so the condition fails and nothing is
-   * undone. Two instances cannot both conclude "quiet" while one is mid-send, which is
-   * the reuse the process-local version caused.
-   *
-   * A crashed process leaves inFlight raised with nothing to settle it, so a claim older
-   * than STALE_CLAIM_MS is treated as abandoned. The direction of the guess matters: a
-   * nonce wrongly considered settled only blocks a rewind, while one wrongly considered
-   * in-flight would let a rewind happen under a live send.
-   */
-  const STALE_CLAIM_MS = 10 * 60 * 1000;
-
-  async function reconcileNonce(key) {
-    try {
-      const doc = await DripperModel.findOne({ address: key }).lean();
-      if (!doc || !doc.nextNonce) return;
-
-      const inFlight = Number(doc.inFlight || 0);
-      const claimAge = doc.inFlightAt ? Date.now() - new Date(doc.inFlightAt).getTime() : null;
-      // A claim that is still young might be a live send anywhere on the fleet.
-      if (inFlight > 0 && claimAge !== null && claimAge < STALE_CLAIM_MS) return;
-
-      const w = getWallet();
-      const onChain = await w.provider.getTransactionCount(w.address, 'pending');
-      if (onChain >= doc.nextNonce) return;
-
-      const rewound = await DripperModel.updateOne(
-        { address: key, inFlight: { $lte: 0 }, nextNonce: { $gt: onChain } },
-        { $set: { nextNonce: onChain } }
-      );
-      if (rewound.modifiedCount) {
-        console.warn(
-          `[Dripper] Rewound the nonce counter from ${doc.nextNonce} to ${onChain} — ` +
-            'nothing was in flight, so the value between them was never sent.'
-        );
+      const now = new Date();
+      const job = {
+        id: randomUUID(),
+        nonce,
+        kind: intent.kind,
+        to: intent.to || '',
+        value: intent.value || '0',
+        data: intent.data || '0x',
+        fingerprint: intent.fingerprint,
+        rawTransaction: '',
+        txHash: '',
+        state: 'reserved',
+        lastError: '',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const reserved = await DripperModel.findOneAndUpdate(
+        {
+          address: key,
+          nonceLeaseId: leaseId,
+          nonceLeaseUntil: { $gt: new Date() },
+          activeTransaction: null,
+        },
+        { $set: { activeTransaction: job, nonceStateVersion: NONCE_STATE_VERSION } },
+        { new: true }
+      ).lean();
+      if (!reserved?.activeTransaction) {
+        throw new Error('Could not persist the dripper transaction intent before signing.');
       }
-    } catch (error) {
-      // Could not reach the chain. Claiming still works; it just skips the heal.
-      console.warn('[Dripper] Could not reconcile the nonce counter -', error.message);
-    }
-  }
 
-  /**
-   * Failures we can positively place BEFORE the transaction reached the node.
- *
- * Only these hand the nonce back. Anything else — a broadcast the node may have accepted,
- * or an error with no `action` at all — leaves the nonce spent.
- */
-const PRE_BROADCAST_ACTIONS = new Set([
-  'estimateGas',
-  'getTransactionCount',
-  'getFeeData',
-  'getGasPrice',
-  'getBlock',
-  'getBlockNumber',
-  'populateTransaction',
-  'call',
-]);
-
-/**
- * Whether a failed send is known to have never reached the node.
- *
- * Exported and pure so the rule can be asserted. It was previously an inline
- * `error?.action !== 'sendTransaction'`, which no test could see and which was wrong in
- * the expensive direction: ethers attaches no `action` to an `eth_sendRawTransaction`
- * failure, so it released the nonce on every failure, including ones where the node
- * might be holding the transaction.
- */
-export function nonceWasUnused(error) {
-  return PRE_BROADCAST_ACTIONS.has(error?.action);
+      const result = await processActiveTransaction({ w, key, leaseId, job: reserved.activeTransaction });
+      if (!result.success) throw new Error(result.error);
+      return result;
+    })
+  );
 }
 
 // Enrolment and top-up grants go to the account owner's EOA. The account contract is
 // the identity used by ApnaRecord, but the owner pays gas for the outer execute call.
-const DRIP_GAS_LIMIT = 21_000n;
-
 async function send(to, value) {
-  const w = getWallet();
-  const nonce = await claimNonce();
-
-  // Settle exactly once per claim. In-flight means "claimed but not yet broadcast", so
-  // it comes down on success as well as failure — and the paths below can overlap, so
-  // the flag is what stops a double decrement.
-  let settled = false;
-  const settle = async (unused) => {
-    if (settled) return;
-    settled = true;
-    await settleNonce(nonce, { unused });
-  };
-
-  try {
-    const tx = await w.sendTransaction({ to, value, nonce, gasLimit: DRIP_GAS_LIMIT });
-
-    // Broadcast. The nonce is spent now whatever happens next, so settle with nothing
-    // to hand back — and do it before the wait, because a wait that throws still had a
-    // live transaction behind it.
-    await settle(false);
-
-    // Wait, and check. A reverted transaction still has a valid hash, so returning one
-
-    // and calling it a top-up reports success for a payment that never happened --
-
-    // precisely the failure this file's header warns about, and precisely what happened:
-
-    // the ledger said the account was funded and it held nothing.
-
-    const receipt = await tx.wait();
-
-    if (!receipt || receipt.status !== 1) {
-
-      throw new Error(`The drip reverted on chain (${tx.hash}). No funds were sent.`);
-
-    }
-
-    return tx.hash;
-  } catch (error) {
-    // A failure BEFORE the broadcast means the nonce was never used, so it has to go
-    // back — abandoning it is the permanent gap that stalls everything after it.
-    //
-    // A failure AT the broadcast is ambiguous: the node may be holding the
-    // transaction. The nonce stays spent, because a rare gap is survivable and a
-    // reused nonce is not.
-    //
-    // This test used to read `error?.action !== 'sendTransaction'`, as though ethers
-    // labelled a broadcast failure that way. It does not. An `eth_sendRawTransaction`
-    // failure is built by `getRpcError()` with no `action` field at all, so the
-    // comparison was true for EVERY failure and the nonce went back even when the
-    // transaction might be live — which is precisely the reuse case, and reuse is the
-    // one outcome that loses funds silently while the ledger records a hash.
-    //
-    // So the test is inverted: release only on an action known to be pre-broadcast.
-    // Being wrong in this direction costs a gap; being wrong the other way costs money.
-    await settle(nonceWasUnused(error));
-    throw error;
-  }
+  const recipient = ethers.getAddress(to);
+  const amount = BigInt(value);
+  const fingerprint = ethers.keccak256(
+    ethers.toUtf8Bytes(`transfer:${recipient.toLowerCase()}:${amount.toString()}`)
+  );
+  const result = await runTransaction({
+    kind: 'transfer',
+    to: recipient,
+    value: amount.toString(),
+    data: '0x',
+    fingerprint,
+  });
+  return result.txHash;
 }
 
-/**
- * Create a contract, and wait until it exists.
- *
- * A sibling of `send` through the same atomic nonce claim, because it is the same
- * wallet spending the same sequence — a deploy racing a drip would otherwise reuse a
- * nonce. The differences are that there is no `to`, and that the address only exists
- * once the transaction is mined, so this has to wait for a receipt.
- *
- * Waiting is correct here and would be wrong for a drip. A drip can return before
- * confirmation because nothing depends on the money being there yet; the account's
- * address IS the result, and there is nothing to report until the chain has one.
- */
+/** Deploy once; a persisted signed transaction is rebroadcast byte-for-byte on retry. */
 export async function deployContract(data) {
-  const w = getWallet();
-  const nonce = await claimNonce();
-
-  // Same settle-once rule as `send`.
-  let settled = false;
-  const settle = async (unused) => {
-    if (settled) return;
-    settled = true;
-    await settleNonce(nonce, { unused });
-  };
-
-  let tx;
-  try {
-    tx = await w.sendTransaction({ data, nonce });
-    // Broadcast, so the nonce is spent — and the address is not known until it mines,
-    // which is why the wait below is outside this try.
-    await settle(false);
-  } catch (error) {
-    await settle(nonceWasUnused(error));
-    throw error;
-  }
-
-  const receipt = await tx.wait();
-
-  const address = receipt?.contractAddress;
-  if (!address) {
+  if (!ethers.isHexString(data)) throw new Error('Deployment data must be hex-encoded.');
+  const fingerprint = ethers.keccak256(data);
+  const result = await runTransaction({ kind: 'deployment', data, fingerprint });
+  if (!result.address) {
     throw new Error(
-      `Deployment transaction ${tx.hash} produced no contract address. It may have ` +
+      `Deployment transaction ${result.txHash} produced no contract address. It may have ` +
         'reverted, or the node may not report receipts.'
     );
   }
-
-  return { txHash: tx.hash, address };
+  return { txHash: result.txHash, address: result.address };
 }
 
 const todayKey = () => new Date().toISOString().slice(0, 10);

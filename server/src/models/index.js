@@ -334,31 +334,53 @@ const DripLedgerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const DripperTransactionSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    nonce: { type: Number, required: true },
+    kind: { type: String, enum: ['transfer', 'deployment'], required: true },
+    to: { type: String, default: '' },
+    value: { type: String, default: '0' },
+    data: { type: String, default: '0x' },
+    fingerprint: { type: String, required: true },
+    rawTransaction: { type: String, default: '' },
+    txHash: { type: String, default: '' },
+    state: { type: String, enum: ['reserved', 'signed', 'broadcast'], default: 'reserved' },
+    lastError: { type: String, default: '' },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const DripperDeploymentSchema = new mongoose.Schema(
+  {
+    fingerprint: { type: String, required: true },
+    txHash: { type: String, required: true },
+    address: { type: String, required: true },
+    chainId: { type: String, required: true },
+    completedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 /**
- * The dripper's nonce counter — one document, keyed by the float's address.
- *
- * This exists because a promise chain only serialises sends INSIDE one process. Two
- * instances each hold their own chain and their own idea of the next nonce, so both
- * would hand the same nonce to two different transactions and one would be rejected
- * while the API reported success twice.
- *
- * `$inc` is atomic in MongoDB, so claiming a nonce is a single round-trip that two
- * callers cannot both win. The returned document is the pre-increment one, which is
- * the value being claimed.
+ * The dripper's shared nonce state, keyed by the float's address. The next intent,
+ * reserved nonce, and exact signed transaction bytes live together so a process crash
+ * cannot leave a nonce claim with no durable information about what may have been sent.
  */
 const DripperSchema = new mongoose.Schema(
   {
     address: { type: String, required: true, unique: true },
     nextNonce: { type: Number, required: true, default: 0 },
-
-    // Claimed but not yet broadcast. In the SHARED document deliberately: a per-process
-    // count cannot tell one instance that another is mid-send, and that blindness is
-    // exactly what made the earlier reconciliation attempt cause a nonce reuse.
-    //
-    // Mongoose drops fields the schema does not declare, so these have to be named here
-    // or the $inc that maintains them would silently do nothing.
+    nonceStateVersion: { type: Number, default: 0 },
+    // Retained only to detect unresolved claims from the earlier counter-only format.
     inFlight: { type: Number, default: 0 },
     inFlightAt: { type: Date, default: null },
+    nonceLeaseId: { type: String, default: '' },
+    nonceLeaseUntil: { type: Date, default: null },
+    activeTransaction: { type: DripperTransactionSchema, default: null },
+    recentDeployments: { type: [DripperDeploymentSchema], default: [] },
 
     // What this float has sent today, as a COUNT rather than a wei total.
     // Every drip is exactly one AMOUNT, and wei does not fit in a JavaScript

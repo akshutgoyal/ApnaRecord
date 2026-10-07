@@ -15,12 +15,12 @@ import fs from 'node:fs';
 import { Wallet } from 'ethers';
 import { createWallet, sealPrivateKey, generateRecoveryCode } from '../../client/src/lib/keystore.js';
 import { enrolMessage } from '../../client/src/lib/wireMessages.js';
-import { nonceWasUnused } from '../../server/src/services/dripper.js';
 import { check, group, report, proofHeaders } from '../support/harness.mjs';
 
 const API = process.env.API_URL || 'http://localhost:5000/api';
 const API_2 = process.env.API_URL_2;
 const MOCK_LOG = process.env.MOCK_LOG || '/tmp/mock-chain.log';
+const CHAIN = process.env.CHAIN || 'http://localhost:8545';
 
 if (!API_2) {
   console.error('\nAPI_URL_2 is required — this suite is about two instances, not one.\n');
@@ -36,16 +36,32 @@ async function post(base, path, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
+async function mockRpc(method, params = []) {
+  const response = await fetch(CHAIN, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const body = await response.json();
+  if (body.error) throw new Error(body.error.message || `Mock RPC ${method} failed.`);
+  return body.result;
+}
+
 const unique = () => `d${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 
+async function prepareEnrolment(email = unique()) {
+  const { address, privateKey } = createWallet();
+  const sealed = await sealPrivateKey(privateKey, generateRecoveryCode());
+  return { email, address, privateKey, sealed };
+}
+
 /** A complete enrolment, aimed at whichever instance is given. */
-async function enrolVia(base) {
-  const email = unique();
+async function enrolVia(base, identity = null) {
+  identity ||= await prepareEnrolment();
+  const { email, address, privateKey, sealed } = identity;
   const requested = await post(base, '/identity/email/request', { email });
   const grant = await post(base, '/identity/email/verify', { email, code: requested.body.devCode });
 
-  const { address, privateKey } = createWallet();
-  const sealed = await sealPrivateKey(privateKey, generateRecoveryCode());
   const timestamp = Date.now();
   const signature = await new Wallet(privateKey).signMessage(enrolMessage(address, timestamp));
 
@@ -109,6 +125,33 @@ check(
   `${funded.length} of 8 reported a transaction hash`
 );
 
+group('durable retry after an unaccepted broadcast');
+const retryIdentity = await prepareEnrolment();
+await mockRpc('mock_rejectNextSend');
+const rejected = await enrolVia(API, retryIdentity);
+check('a rejected broadcast is reported as a failed deployment', rejected.created.status === 502);
+check('the mock rejected the transaction before accepting it', logContent().includes('rejected before accepting'));
+await new Promise((resolve) => setTimeout(resolve, 2100));
+const retried = await enrolVia(API_2, retryIdentity);
+check(
+  'the next instance retries the persisted signed transaction and completes enrolment',
+  retried.created.status === 201 && Boolean(retried.created.body.accountTxHash),
+  JSON.stringify(retried.created.body).slice(0, 220)
+);
+
+group('ambiguous broadcast recovery');
+await mockRpc('mock_failNextSendResponse');
+const recovered = await enrolVia(API);
+check(
+  'enrolment completes when the node accepts but corrupts the send reply',
+  recovered.created.status === 201 && Boolean(recovered.created.body.accountTxHash),
+  JSON.stringify(recovered.created.body).slice(0, 220)
+);
+check(
+  'the ambiguous response was injected',
+  logContent().includes('accepted, but replying with a bad hash')
+);
+
 // THE WHOLE LOG, NOT A POSITIONAL SLICE.
 //
 // An earlier version compared "the lines after this marker" against the claims this
@@ -154,36 +197,5 @@ check(
   Number.isFinite(Number(dripper.balanceEth)),
   String(dripper.balanceEth)
 );
-
-// ---------------------------------------------------------------- the nonce rule
-//
-// Whether a failed send gives its nonce back is the difference between a gap and a
-// reused nonce, and reuse loses funds silently. The rule used to be an inline
-// `error?.action !== 'sendTransaction'`, which read as though ethers labelled a
-// broadcast failure that way. It does not — an eth_sendRawTransaction failure carries no
-// `action` at all — so the comparison was true for every failure and the nonce went back
-// even when the node might be holding the transaction. Nothing asserted it, so it
-// survived. These are the assertions that would have caught it.
-
-group('the nonce rule');
-
-check(
-  'a broadcast failure with no action at all keeps the nonce spent',
-  nonceWasUnused({ code: 'SERVER_ERROR' }) === false,
-  'this is the shape ethers actually produces for eth_sendRawTransaction'
-);
-check(
-  'an explicit broadcast failure keeps the nonce spent',
-  nonceWasUnused({ action: 'sendTransaction' }) === false
-);
-check(
-  'an unrecognised action keeps the nonce spent',
-  nonceWasUnused({ action: 'somethingNewInEthers' }) === false,
-  'the default has to be "spent" — being wrong that way costs a gap, not a reuse'
-);
-check('estimation failed before broadcast, so the nonce is free', nonceWasUnused({ action: 'estimateGas' }) === true);
-check('the nonce read failed before broadcast', nonceWasUnused({ action: 'getTransactionCount' }) === true);
-check('fee estimation failed before broadcast', nonceWasUnused({ action: 'getFeeData' }) === true);
-check('a null error is treated as ambiguous', nonceWasUnused(null) === false);
 
 report();
